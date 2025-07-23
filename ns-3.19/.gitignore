@@ -9,6 +9,7 @@ mix/output/*
 mix/*_flow.txt
 config/*_flow.txt
 analysis/figures/*.pdf
+analysis/figures/*.png
 **/*.pyc
 .vscode
 __pycache__
