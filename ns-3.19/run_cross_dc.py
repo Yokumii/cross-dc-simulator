@@ -110,8 +110,7 @@ lb_modes = {
 }
 
 topo2bdp = {
-    "cross_dc_k4_dc2_os2": 208000,  # cross-dc -> 100G internal, 400G DCI
-    "cross_dc_k4_dc3_os2": 312000,  # cross-dc -> 100G internal, 400G DCI
+    "cross_dc_k4_dc2_os2": 102008250,  # cross-dc -> 100G internal, 400G DCI
 }
 
 FLOWGEN_DEFAULT_TIME = 2.0  # see /traffic_gen/traffic_gen.py::base_t
