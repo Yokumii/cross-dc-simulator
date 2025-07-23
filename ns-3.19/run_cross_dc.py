@@ -48,6 +48,12 @@ LB_MODE {lb_mode}
 ENABLE_PFC {enabled_pfc}
 ENABLE_IRN {enabled_irn}
 
+CONWEAVE_TX_EXPIRY_TIME {cwh_tx_expiry_time}
+CONWEAVE_REPLY_TIMEOUT_EXTRA {cwh_extra_reply_deadline}
+CONWEAVE_PATH_PAUSE_TIME {cwh_path_pause_time}
+CONWEAVE_EXTRA_VOQ_FLUSH_TIME {cwh_extra_voq_flush_time}
+CONWEAVE_DEFAULT_VOQ_WAITING_TIME {cwh_default_voq_waiting_time}
+
 ALPHA_RESUME_INTERVAL 1
 RATE_DECREASE_INTERVAL 4
 CLAMP_TARGET_RATE 0
@@ -112,13 +118,13 @@ FLOWGEN_DEFAULT_TIME = 2.0  # see /traffic_gen/traffic_gen.py::base_t
 
 def main():
     # make directory if not exists
-    isExist = os.path.exists("mix/output")
+    isExist = os.path.exists(os.getcwd() + "/mix/output/")
     if not isExist:
-        os.makedirs("mix/output")
-        print("The new directory is created - mix/output/")
+        os.makedirs(os.getcwd() + "/mix/output/")
+        print("The new directory is created - {}".format(os.getcwd() + "/mix/output/"))
 
     parser = argparse.ArgumentParser(description='run simulation')
-    # 基本参数
+    # primary parameters
     parser.add_argument('--cc', dest='cc', action='store',
                         default='dcqcn', help="hpcc/dcqcn/timely/dctcp (default: dcqcn)")
     parser.add_argument('--lb', dest='lb', action='store',
@@ -138,7 +144,7 @@ def main():
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
                         type=int, default=10000, help="interval of sampling statistics for queue status (default: 10000ns)")
 
-    # 跨数据中心参数
+    # cross-dc parameters
     parser.add_argument('--traffic-type', dest='traffic_type', action='store',
                       default='mixed', help="traffic type: mixed/intra_only (default: mixed)")
     parser.add_argument('--k-fat', dest='k_fat', action='store',
@@ -163,17 +169,17 @@ def main():
     config_ID = 0
     while (isExist):
         config_ID = str(random.randrange(MAX_RAND_RANGE))
-        isExist = os.path.exists(f"mix/output/{config_ID}")
+        isExist = os.path.exists(os.getcwd() + "/mix/output/" + config_ID)
 
-    # 创建必要的目录
-    os.makedirs(f"mix/output/{config_ID}")
+    # make necessary directories
+    os.makedirs(os.getcwd() + "/mix/output/" + config_ID)
     os.makedirs("config", exist_ok=True)
 
     # input parameters
     cc_mode = cc_modes[args.cc]
     lb_mode = lb_modes[args.lb]
-    enabled_pfc = args.pfc
-    enabled_irn = args.irn
+    enabled_pfc = int(args.pfc)
+    enabled_irn = int(args.irn)
     buffer = args.buffer
     dci_buffer = args.dci_buffer
     enforce_win = args.enforce_win
@@ -182,41 +188,39 @@ def main():
     flowgen_stop_time = flowgen_start_time + args.simul_time
     sw_monitoring_interval = args.sw_monitoring_interval
 
-    # 生成拓扑文件
+    # generate topology file
     print("Generating topology...")
     topo = f"cross_dc_k{args.k_fat}_dc{args.num_dc}_os2"
     topo_file = f"config/{topo}.txt"
     
-    # 如果拓扑文件不存在，才生成
     if not os.path.exists(topo_file):
         os.system(f"python3 config/cross_dc_topology_gen.py {args.k_fat} 2 {args.num_dc} {args.intra_bw} 0.01 {args.inter_bw} 4")
         print(f"Topology file generated: {topo_file}")
     else:
         print(f"Using existing topology file: {topo_file}")
 
-    # 从拓扑文件中获取DCI交换机ID
+    # get DCI switch IDs from topology file
     dci_switch_ids = []
     
     if os.path.exists(topo_file):
-        # 读取最后一行，获取DCI交换机ID
+        # read the last line, get DCI switch IDs
         with open(topo_file, 'r') as f:
             lines = f.readlines()
-            if lines:  # 确保文件不为空
+            if lines:  # ensure the file is not empty
                 last_line = lines[-1].strip()
-                # 最后一行格式应该是: id1 id2 400Gbps 4000000ns 0.0
                 parts = last_line.split()
                 if len(parts) >= 2:
-                    dci_switch_ids.append(int(parts[0]))  # 第一个DC的DCI交换机ID
-                    dci_switch_ids.append(int(parts[1]))  # 第二个DC的DCI交换机ID
+                    dci_switch_ids.append(int(parts[0]))  # the DCI switch ID of the first DC
+                    dci_switch_ids.append(int(parts[1]))  # the DCI switch ID of the second DC
                     print(f"Found DCI switch IDs from topology file: {dci_switch_ids}")
                 else:
                     print("Warning: Could not parse DCI switch IDs from topology file")
             else:
                 print("Warning: Topology file is empty")
     
-    # 如果从拓扑文件中无法获取DCI交换机ID，则使用默认值
+    # if cannot get DCI switch IDs from topology file, use default values
     if not dci_switch_ids and args.num_dc == 2:
-        dci_switch_ids = [52, 105]  # 对于k=4, num_dc=2的情况，DCI交换机ID是52和105
+        dci_switch_ids = [52, 105]  # for k=4, num_dc=2, the DCI switch IDs are 52 and 105
         print(f"Using default DCI switch IDs: {dci_switch_ids}")
 
     # Sanity checks
@@ -229,14 +233,13 @@ def main():
     if args.simul_time < 0.005:
         raise Exception("CONFIG ERROR : Runtime must be larger than 5ms.")
 
-    # 生成流量文件
+    # generate traffic file
     print("Generating traffic...")
-    # 为不同的流量类型生成不同的文件名
+    # generate different file names for different traffic types
     flow_suffix = "mixed" if args.traffic_type == "mixed" else "intra_only"
     flow_file = f"{topo}_{flow_suffix}_flow.txt"
     flow_path = f"config/{flow_file}"
     
-    # 如果流量文件不存在，才生成
     if not os.path.exists(flow_path):
         if args.traffic_type == "mixed":
             os.system(f"python3 traffic_gen/cross_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --inter-load {args.inter_load} --intra-bw {args.intra_bw} --inter-bw {args.inter_bw} -t {args.simul_time} -c traffic_gen/AliStorage2019.txt -o {flow_path}")
@@ -246,33 +249,55 @@ def main():
     else:
         print(f"Using existing traffic file: {flow_path}")
 
-    # 配置文件路径
-    config_name = f"mix/output/{config_ID}/config.txt"
-    print(f"Config filename: {config_name}")
+    # config file path
+    config_name = os.getcwd() + "/mix/output/" + config_ID + "/config.txt"
+    print("Config filename: {}".format(config_name))
 
     # window settings
     has_win = 0
     var_win = 0
-    if (cc_mode == 3 or cc_mode == 8 or enforce_win == 1):
+    if (cc_mode == 3 or cc_mode == 8 or enforce_win == 1):  # HPCC or DCTCP or enforcement
         has_win = 1
         var_win = 1
         if enforce_win == 1:
             print("### INFO: Enforced to use window scheme! ###")
 
+    # ConWeave parameters
+    if (lb_mode == 9):  # ConWeave
+        cwh_extra_reply_deadline = 4  # 4us, NOTE: this is "extra" term to base RTT
+        cwh_path_pause_time = 16  # 8us (K_min) or 16us
+        cwh_extra_voq_flush_time = 16
+        cwh_default_voq_waiting_time = 300
+        cwh_tx_expiry_time = 1000  # 1ms
+    else:
+        # Default ConWeave parameters (not used)
+        cwh_extra_reply_deadline = 4
+        cwh_path_pause_time = 16
+        cwh_extra_voq_flush_time = 64
+        cwh_default_voq_waiting_time = 400
+        cwh_tx_expiry_time = 1000
+
     # record to history
     simulday = datetime.now().strftime("%m/%d/%y")
     with open("./mix/.history", "a") as history:
-        history.write("{simulday},{config_ID},{cc_mode},{lb_mode},{pfc},{irn},{has_win},{var_win},{topo},{cdf},{time}\n".format(
+        history.write("{simulday},{config_ID},{cc_mode},{lb_mode},{cwh_tx_expiry_time},{cwh_extra_reply_deadline},{cwh_path_pause_time},{cwh_extra_voq_flush_time},{cwh_default_voq_waiting_time},{pfc},{irn},{has_win},{var_win},{topo},{bw},{cdf},{load},{time}\n".format(
             simulday=simulday,
             config_ID=config_ID,
             cc_mode=cc_mode,
             lb_mode=lb_mode,
+            cwh_tx_expiry_time=cwh_tx_expiry_time,
+            cwh_extra_reply_deadline=cwh_extra_reply_deadline,
+            cwh_path_pause_time=cwh_path_pause_time,
+            cwh_extra_voq_flush_time=cwh_extra_voq_flush_time,
+            cwh_default_voq_waiting_time=cwh_default_voq_waiting_time,
             pfc=enabled_pfc,
             irn=enabled_irn,
             has_win=has_win,
             var_win=var_win,
             topo=topo,
+            bw=args.intra_bw,
             cdf=cdf,
+            load=float(args.intra_load) if args.traffic_type == "intra_only" else float(args.intra_load) + float(args.inter_load),
             time=args.simul_time,
         ))
 
@@ -285,26 +310,26 @@ def main():
 
     # DCQCN parameters
     kmax_map = "6 %d %d %d %d %d %d %d %d %d %d %d %d" % (
-        100*1000000000, 400,
-        200*1000000000, 400,
-        400*1000000000, 400,
-        800*1000000000, 400,
-        1000*1000000000, 400,
-        1600*1000000000, 400)
+        args.intra_bw*200000000, 400, 
+        args.intra_bw*500000000, 400, 
+        args.intra_bw*1000000000, 400, 
+        args.intra_bw*2*1000000000, 400, 
+        args.intra_bw*2500000000, 400, 
+        args.intra_bw*4*1000000000, 400)
     kmin_map = "6 %d %d %d %d %d %d %d %d %d %d %d %d" % (
-        100*1000000000, 100,
-        200*1000000000, 100,
-        400*1000000000, 100,
-        800*1000000000, 100,
-        1000*1000000000, 100,
-        1600*1000000000, 100)
+        args.intra_bw*200000000, 100, 
+        args.intra_bw*500000000, 100, 
+        args.intra_bw*1000000000, 100, 
+        args.intra_bw*2*1000000000, 100, 
+        args.intra_bw*2500000000, 100, 
+        args.intra_bw*4*1000000000, 100)
     pmax_map = "6 %d %d %d %d %d %.2f %d %.2f %d %.2f %d %.2f" % (
-        100*1000000000, 0.2,
-        200*1000000000, 0.2,
-        400*1000000000, 0.2,
-        800*1000000000, 0.2,
-        1000*1000000000, 0.2,
-        1600*1000000000, 0.2)
+        args.intra_bw*200000000, 0.2, 
+        args.intra_bw*500000000, 0.2, 
+        args.intra_bw*1000000000, 0.2, 
+        args.intra_bw*2*1000000000, 0.2, 
+        args.intra_bw*2500000000, 0.2, 
+        args.intra_bw*4*1000000000, 0.2)
 
     # queue monitoring
     qlen_mon_start = flowgen_start_time
@@ -347,7 +372,12 @@ def main():
             kmax_map=kmax_map,
             kmin_map=kmin_map,
             pmax_map=pmax_map,
-            load=float(args.intra_load) if args.traffic_type == "intra_only" else float(args.intra_load) + float(args.inter_load)
+            load=float(args.intra_load) if args.traffic_type == "intra_only" else float(args.intra_load) + float(args.inter_load),
+            cwh_tx_expiry_time=cwh_tx_expiry_time,
+            cwh_extra_reply_deadline=cwh_extra_reply_deadline,
+            cwh_path_pause_time=cwh_path_pause_time,
+            cwh_extra_voq_flush_time=cwh_extra_voq_flush_time,
+            cwh_default_voq_waiting_time=cwh_default_voq_waiting_time
         )
     else:
         print("unknown cc:{}".format(args.cc))
@@ -373,11 +403,21 @@ def main():
     print(run_command)
     os.system(run_command)
 
-    # analyze FCT
+    ####################################################
+    #                 Analyze the output FCT           #
+    ####################################################
+    # NOTE: collect data except warm-up and cold-finish period
     fct_analysis_time_limit_begin = int(flowgen_start_time * 1e9) + int(0.005 * 1e9)
     fct_analysistime_limit_end = int(flowgen_stop_time * 1e9) + int(0.05 * 1e9)
 
     print("Analyzing output FCT...")
+    print("python3 fctAnalysis.py -id {config_ID} -dir {dir} -bdp {bdp} -sT {fct_analysis_time_limit_begin} -fT {fct_analysistime_limit_end} > /dev/null 2>&1".format(
+        config_ID=config_ID,
+        dir=os.getcwd(),
+        bdp=bdp,
+        fct_analysis_time_limit_begin=fct_analysis_time_limit_begin,
+        fct_analysistime_limit_end=fct_analysistime_limit_end
+    ))
     os.system("python3 fctAnalysis.py -id {config_ID} -dir {dir} -bdp {bdp} -sT {fct_analysis_time_limit_begin} -fT {fct_analysistime_limit_end} > /dev/null 2>&1".format(
         config_ID=config_ID,
         dir=os.getcwd(),
@@ -388,14 +428,25 @@ def main():
 
     # analyze queue (ConWeave)
     if lb_mode == 9:
+        ################################################################
+        #             Analyze hardware resource of ConWeave            #
+        ################################################################
+        # NOTE: collect data except warm-up and cold-finish period
         queue_analysis_time_limit_begin = int(flowgen_start_time * 1e9) + int(0.005 * 1e9)
         queue_analysistime_limit_end = int(flowgen_stop_time * 1e9)
         print("Analyzing output Queue...")
-        os.system("python3 queueAnalysis.py -id {config_ID} -dir {dir} -sT {queue_analysis_time_limit_begin} -fT {queue_analysistime_limit_end} > /dev/null 2>&1".format(
+        print("python3 queueAnalysis.py -id {config_ID} -dir {dir} -sT {queue_analysis_time_limit_begin} -fT {queue_analysistime_limit_end} > /dev/null 2>&1".format(
             config_ID=config_ID,
             dir=os.getcwd(),
             queue_analysis_time_limit_begin=queue_analysis_time_limit_begin,
             queue_analysistime_limit_end=queue_analysistime_limit_end
+        ))
+        os.system("python3 queueAnalysis.py -id {config_ID} -dir {dir} -sT {queue_analysis_time_limit_begin} -fT {queue_analysistime_limit_end} > /dev/null 2>&1".format(
+            config_ID=config_ID,
+            dir=os.getcwd(),
+            queue_analysis_time_limit_begin=queue_analysis_time_limit_begin,
+            queue_analysistime_limit_end=queue_analysistime_limit_end,
+            monitoringInterval=sw_monitoring_interval
         ))
 
     print("\n\n============== Done ============== ")

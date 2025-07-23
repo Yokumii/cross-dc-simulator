@@ -1221,7 +1221,7 @@ int main(int argc, char *argv[]) {
         topof >> src >> dst >> data_rate >> link_delay >> error_rate;
 
         /** ASSUME: fixed one-hop delay across network */
-        // 允许拓扑文件中使用不同的链路延迟值
+        // allow different link delay values in topology file
         // assert(std::to_string(one_hop_delay) + "ns" == link_delay);
 
         link_pairs.push_back(std::make_pair(src, dst));

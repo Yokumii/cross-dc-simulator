@@ -1,14 +1,14 @@
 #!/bin/bash
-# 跨数据中心模拟批处理脚本
-# 同时在后台运行单独intra和混跑的场景
+# cross-datacenter simulation batch script
+# run both intra-only and mixed simulations in background
 
-# 检查screen是否安装
+# check if screen is installed
 if ! command -v screen &> /dev/null; then
     echo "Error: screen is not installed. Please install it using 'apt-get install screen'."
     exit 1
 fi
 
-# 设置默认参数
+# set default parameters
 K_FAT=4
 NUM_DC=2
 SIMUL_TIME=0.01
@@ -21,7 +21,7 @@ DCI_BUFFER=128
 CC="dcqcn"
 LB="fecmp"
 
-# 解析命令行参数
+# parse command line parameters
 while [[ $# -gt 0 ]]; do
     key="$1"
     case $key in
@@ -76,7 +76,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# 显示参数信息
+# show parameter information
 echo "Running cross-datacenter simulations with the following parameters:"
 echo "Fat-tree K: $K_FAT"
 echo "Number of datacenters: $NUM_DC"
@@ -90,34 +90,75 @@ echo "DCI buffer size: $DCI_BUFFER MB"
 echo "Congestion control: $CC"
 echo "Load balancing: $LB"
 
-# 创建日志目录
+# create log directory
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_DIR="simulation_logs_${TIMESTAMP}"
 mkdir -p $LOG_DIR
 
-# 生成拓扑文件（只需生成一次）
-echo "Generating topology..."
-python3 config/cross_dc_topology_gen.py $K_FAT 2 $NUM_DC $INTRA_BW 0.01 $INTER_BW 4 > $LOG_DIR/topology_gen.log 2>&1
-
-# 确保拓扑文件已经完全生成
-sleep 2
-
-# 预先生成流量文件，避免同时访问冲突
-echo "Generating traffic files..."
+# define file paths
 TOPO="cross_dc_k${K_FAT}_dc${NUM_DC}_os2"
+TOPO_FILE="config/${TOPO}.txt"
+INTRA_FLOW_FILE="config/${TOPO}_intra_only_flow.txt"
+MIXED_FLOW_FILE="config/${TOPO}_mixed_flow.txt"
 
-# 生成intra-only流量
-echo "Generating intra-only traffic..."
-python3 traffic_gen/intra_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --intra-bw $INTRA_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o config/${TOPO}_intra_only_flow.txt > $LOG_DIR/intra_traffic_gen.log 2>&1
+# check and generate topology file if needed
+if [ -f "$TOPO_FILE" ]; then
+    echo "Topology file $TOPO_FILE already exists, skipping generation."
+else
+    echo "Generating topology file $TOPO_FILE..."
+    python3 config/cross_dc_topology_gen.py $K_FAT 2 $NUM_DC $INTRA_BW 0.01 $INTER_BW 4 > $LOG_DIR/topology_gen.log 2>&1
+    if [ $? -eq 0 ]; then
+        echo "Topology file generated successfully."
+    else
+        echo "Error: Failed to generate topology file. Check $LOG_DIR/topology_gen.log for details."
+        exit 1
+    fi
+fi
 
-# 生成mixed流量
-echo "Generating mixed traffic..."
-python3 traffic_gen/cross_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --inter-load $INTER_LOAD --intra-bw $INTRA_BW --inter-bw $INTER_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o config/${TOPO}_mixed_flow.txt > $LOG_DIR/mixed_traffic_gen.log 2>&1
+# ensure topology file exists before proceeding
+if [ ! -f "$TOPO_FILE" ]; then
+    echo "Error: Topology file $TOPO_FILE does not exist. Cannot proceed."
+    exit 1
+fi
 
-# 确保流量文件已经完全生成
-sleep 2
+# check and generate intra-only traffic file if needed
+if [ -f "$INTRA_FLOW_FILE" ]; then
+    echo "Intra-only traffic file $INTRA_FLOW_FILE already exists, skipping generation."
+else
+    echo "Generating intra-only traffic file $INTRA_FLOW_FILE..."
+    python3 traffic_gen/intra_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --intra-bw $INTRA_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o $INTRA_FLOW_FILE > $LOG_DIR/intra_traffic_gen.log 2>&1
+    if [ $? -eq 0 ]; then
+        echo "Intra-only traffic file generated successfully."
+    else
+        echo "Error: Failed to generate intra-only traffic file. Check $LOG_DIR/intra_traffic_gen.log for details."
+        exit 1
+    fi
+fi
 
-# 启动intra-only场景的screen会话
+# check and generate mixed traffic file if needed
+if [ -f "$MIXED_FLOW_FILE" ]; then
+    echo "Mixed traffic file $MIXED_FLOW_FILE already exists, skipping generation."
+else
+    echo "Generating mixed traffic file $MIXED_FLOW_FILE..."
+    python3 traffic_gen/cross_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --inter-load $INTER_LOAD --intra-bw $INTRA_BW --inter-bw $INTER_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o $MIXED_FLOW_FILE > $LOG_DIR/mixed_traffic_gen.log 2>&1
+    if [ $? -eq 0 ]; then
+        echo "Mixed traffic file generated successfully."
+    else
+        echo "Error: Failed to generate mixed traffic file. Check $LOG_DIR/mixed_traffic_gen.log for details."
+        exit 1
+    fi
+fi
+
+# ensure traffic files exist before proceeding
+if [ ! -f "$INTRA_FLOW_FILE" ] || [ ! -f "$MIXED_FLOW_FILE" ]; then
+    echo "Error: Required traffic files do not exist. Cannot proceed."
+    exit 1
+fi
+
+echo "All required files are ready. Starting simulations..."
+sleep 1
+
+# start intra-only simulation
 echo "Starting intra-only simulation..."
 screen -dmS intra_only bash -c "cd $(pwd) && python3 run_cross_dc.py \
     --traffic-type intra_only \
@@ -133,7 +174,7 @@ screen -dmS intra_only bash -c "cd $(pwd) && python3 run_cross_dc.py \
     --lb $LB \
     2>&1 | tee $LOG_DIR/intra_only.log"
 
-# 启动mixed场景的screen会话
+# start mixed simulation
 echo "Starting mixed simulation..."
 screen -dmS mixed bash -c "cd $(pwd) && python3 run_cross_dc.py \
     --traffic-type mixed \
