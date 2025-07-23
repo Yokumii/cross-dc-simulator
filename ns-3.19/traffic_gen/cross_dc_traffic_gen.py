@@ -50,6 +50,7 @@ if __name__ == "__main__":
     intra_dc_link_rate = 100
     inter_dc_link_rate = 400
     simulation_time = 0.1
+    flow_scale = 1.0
 
     parser = OptionParser()
     parser.add_option("-c", "--cdf", dest="cdf_file", 
@@ -82,6 +83,9 @@ if __name__ == "__main__":
     parser.add_option("-o", "--output", dest="output", 
                       help="the output file", 
                       default="cross_dc_traffic.txt")
+    parser.add_option("--flow-scale", dest="flow_scale", 
+                      help="scale factor for flow arrival interval (larger values = fewer flows), default: %.1f" % flow_scale, 
+                      default=str(flow_scale))
     options, args = parser.parse_args()
 
     # Parse parameters
@@ -95,6 +99,7 @@ if __name__ == "__main__":
     inter_dc_link_rate = float(options.inter_dc_link_rate)
     simulation_time = float(options.time)
     output_file = options.output
+    flow_scale = float(options.flow_scale)
 
     # Calculate datacenter parameters
     n_core = int(k_fat / 2 * k_fat / 2)
@@ -127,6 +132,7 @@ if __name__ == "__main__":
     print(f"Intra-datacenter link bandwidth: {intra_dc_link_rate}Gbps")
     print(f"Inter-datacenter link bandwidth: {inter_dc_link_rate}Gbps")
     print(f"Simulation time: {simulation_time}s")
+    print(f"Flow scale factor: {flow_scale}")
     print(f"CDF file: {cdf_file}")
     print(f"Output file: {output_file}")
 
@@ -165,13 +171,20 @@ if __name__ == "__main__":
     intra_dc_bandwidth = intra_dc_link_rate * 1e9  # convert to bps
     inter_dc_bandwidth = inter_dc_link_rate * 1e9  # convert to bps
     
-    intra_dc_avg_inter_arrival = 1 / (intra_dc_bandwidth * intra_dc_load / 8.0 / avg_flow_size) * 1e9  # in ns
-    inter_dc_avg_inter_arrival = 1 / (inter_dc_bandwidth * inter_dc_load / 8.0 / avg_flow_size) * 1e9  # in ns
+    # apply flow scale factor
+    intra_dc_avg_inter_arrival = 1 / (intra_dc_bandwidth * intra_dc_load / 8.0 / avg_flow_size) * 1e9 * flow_scale  # in ns
+    inter_dc_avg_inter_arrival = 1 / (inter_dc_bandwidth * inter_dc_load / 8.0 / avg_flow_size) * 1e9 * flow_scale  # in ns
 
-    # Estimate number of flows
+    # print adjusted arrival intervals
+    print(f"Adjusted intra-DC flow arrival interval: {intra_dc_avg_inter_arrival / 1e6:.3f} ms")
+    print(f"Adjusted inter-DC flow arrival interval: {inter_dc_avg_inter_arrival / 1e6:.3f} ms")
+
+    # Estimate number of flows (consider flow scale factor)
     intra_dc_flow_estimate = int(simulation_time_ns / intra_dc_avg_inter_arrival * n_server_total)
     inter_dc_flow_estimate = int(simulation_time_ns / inter_dc_avg_inter_arrival * n_server_total)
     total_flow_estimate = intra_dc_flow_estimate + inter_dc_flow_estimate
+    
+    print(f"Estimated flows: intra={intra_dc_flow_estimate}, inter={inter_dc_flow_estimate}, total={total_flow_estimate}")
     
     # Initialize flow counter
     n_flow = 0

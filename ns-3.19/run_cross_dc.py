@@ -142,8 +142,6 @@ def main():
                         type=int, default=0, help="enforce to use window scheme (default: 0)")
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
                         type=int, default=10000, help="interval of sampling statistics for queue status (default: 10000ns)")
-
-    # cross-dc parameters
     parser.add_argument('--traffic-type', dest='traffic_type', action='store',
                       default='mixed', help="traffic type: mixed/intra_only (default: mixed)")
     parser.add_argument('--k-fat', dest='k_fat', action='store',
@@ -160,6 +158,8 @@ def main():
                       type=int, default=100, help="Intra-datacenter bandwidth (Gbps) (default: 100)")
     parser.add_argument('--inter-bw', dest='inter_bw', action='store',
                       type=int, default=400, help="Inter-datacenter bandwidth (Gbps) (default: 400)")
+    parser.add_argument('--flow-scale', dest='flow_scale', action='store',
+                      type=float, default=1.0, help="Flow scale factor (larger values = fewer flows) (default: 1.0)")
 
     args = parser.parse_args()
 
@@ -241,9 +241,9 @@ def main():
     
     if not os.path.exists(flow_path):
         if args.traffic_type == "mixed":
-            os.system(f"python3 traffic_gen/cross_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --inter-load {args.inter_load} --intra-bw {args.intra_bw} --inter-bw {args.inter_bw} -t {args.simul_time} -c traffic_gen/AliStorage2019.txt -o {flow_path}")
+            os.system(f"python3 traffic_gen/cross_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --inter-load {args.inter_load} --intra-bw {args.intra_bw} --inter-bw {args.inter_bw} -t {args.simul_time} -c traffic_gen/AliStorage2019.txt -o {flow_path} --flow-scale {args.flow_scale}")
         else:  # intra_only
-            os.system(f"python3 traffic_gen/intra_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --intra-bw {args.intra_bw} -t {args.simul_time} -c traffic_gen/AliStorage2019.txt -o {flow_path}")
+            os.system(f"python3 traffic_gen/intra_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --intra-bw {args.intra_bw} -t {args.simul_time} -c traffic_gen/AliStorage2019.txt -o {flow_path} --flow-scale {args.flow_scale}")
         print(f"Traffic file generated: {flow_path}")
     else:
         print(f"Using existing traffic file: {flow_path}")

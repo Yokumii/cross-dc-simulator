@@ -48,6 +48,7 @@ if __name__ == "__main__":
     intra_dc_load = 0.5
     intra_dc_link_rate = 100
     simulation_time = 0.1
+    flow_scale = 1.0
 
     parser = OptionParser()
     parser.add_option("-c", "--cdf", dest="cdf_file", 
@@ -74,6 +75,9 @@ if __name__ == "__main__":
     parser.add_option("-o", "--output", dest="output", 
                       help="the output file", 
                       default="intra_dc_traffic.txt")
+    parser.add_option("--flow-scale", dest="flow_scale", 
+                      help="scale factor for flow arrival interval (larger values = fewer flows), default: %.1f" % flow_scale, 
+                      default=str(flow_scale))
     options, args = parser.parse_args()
 
     # Parse parameters
@@ -85,6 +89,7 @@ if __name__ == "__main__":
     intra_dc_link_rate = float(options.intra_dc_link_rate)
     simulation_time = float(options.time)
     output_file = options.output
+    flow_scale = float(options.flow_scale)
 
     # Calculate datacenter parameters
     n_core = int(k_fat / 2 * k_fat / 2)
@@ -105,7 +110,7 @@ if __name__ == "__main__":
     n_server_total = n_server_per_dc * num_datacenters
 
     # Display configuration
-    print("Intra-Datacenter Traffic Generator")
+    print("Intra-Datacenter Only Traffic Generator")
     print("----------------------------------")
     print(f"Fat-tree K: {k_fat}")
     print(f"Over-subscription ratio: {oversubscript}")
@@ -115,6 +120,7 @@ if __name__ == "__main__":
     print(f"Intra-datacenter load: {intra_dc_load}")
     print(f"Intra-datacenter link bandwidth: {intra_dc_link_rate}Gbps")
     print(f"Simulation time: {simulation_time}s")
+    print(f"Flow scale factor: {flow_scale}")
     print(f"CDF file: {cdf_file}")
     print(f"Output file: {output_file}")
 
@@ -152,16 +158,23 @@ if __name__ == "__main__":
     # Calculate inter-arrival times for intra DC traffic
     intra_dc_bandwidth = intra_dc_link_rate * 1e9  # convert to bps
     
-    intra_dc_avg_inter_arrival = 1 / (intra_dc_bandwidth * intra_dc_load / 8.0 / avg_flow_size) * 1e9  # in ns
+    # apply flow scale factor
+    intra_dc_avg_inter_arrival = 1 / (intra_dc_bandwidth * intra_dc_load / 8.0 / avg_flow_size) * 1e9 * flow_scale  # in ns
 
-    # Estimate number of flows
+    # print adjusted arrival interval
+    print(f"Adjusted intra-DC flow arrival interval: {intra_dc_avg_inter_arrival / 1e6:.3f} ms")
+
+    # Estimate number of flows (consider flow scale factor)
     intra_dc_flow_estimate = int(simulation_time_ns / intra_dc_avg_inter_arrival * n_server_total)
+    total_flow_estimate = intra_dc_flow_estimate
+    
+    print(f"Estimated flows: intra={intra_dc_flow_estimate}, total={total_flow_estimate}")
     
     # Initialize flow counter
     n_flow = 0
     
     # Write estimated flow count as placeholder (will update later)
-    ofile.write(f"{intra_dc_flow_estimate}\n")
+    ofile.write(f"{total_flow_estimate}\n")
 
     # Generate intra-datacenter flows
     print("Generating intra-datacenter flows...")
@@ -209,4 +222,5 @@ if __name__ == "__main__":
 
     print(f"Traffic generation complete.")
     print(f"Total flows: {n_flow}")
+    print(f"Intra-datacenter flows: {intra_flow_count}")
     print(f"Output written to: {output_file}") 

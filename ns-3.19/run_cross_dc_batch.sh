@@ -20,6 +20,7 @@ BUFFER=16
 DCI_BUFFER=128
 CC="dcqcn"
 LB="fecmp"
+FLOW_SCALE=1.0
 
 # parse command line parameters
 while [[ $# -gt 0 ]]; do
@@ -69,6 +70,10 @@ while [[ $# -gt 0 ]]; do
             LB="$2"
             shift 2
             ;;
+        --flow-scale)
+            FLOW_SCALE="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
             shift
@@ -89,6 +94,7 @@ echo "Buffer size: $BUFFER MB"
 echo "DCI buffer size: $DCI_BUFFER MB"
 echo "Congestion control: $CC"
 echo "Load balancing: $LB"
+echo "Flow scale factor: $FLOW_SCALE"
 
 # create log directory
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
@@ -126,7 +132,7 @@ if [ -f "$INTRA_FLOW_FILE" ]; then
     echo "Intra-only traffic file $INTRA_FLOW_FILE already exists, skipping generation."
 else
     echo "Generating intra-only traffic file $INTRA_FLOW_FILE..."
-    python3 traffic_gen/intra_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --intra-bw $INTRA_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o $INTRA_FLOW_FILE > $LOG_DIR/intra_traffic_gen.log 2>&1
+    python3 traffic_gen/intra_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --intra-bw $INTRA_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o $INTRA_FLOW_FILE --flow-scale $FLOW_SCALE > $LOG_DIR/intra_traffic_gen.log 2>&1
     if [ $? -eq 0 ]; then
         echo "Intra-only traffic file generated successfully."
     else
@@ -140,7 +146,7 @@ if [ -f "$MIXED_FLOW_FILE" ]; then
     echo "Mixed traffic file $MIXED_FLOW_FILE already exists, skipping generation."
 else
     echo "Generating mixed traffic file $MIXED_FLOW_FILE..."
-    python3 traffic_gen/cross_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --inter-load $INTER_LOAD --intra-bw $INTRA_BW --inter-bw $INTER_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o $MIXED_FLOW_FILE > $LOG_DIR/mixed_traffic_gen.log 2>&1
+    python3 traffic_gen/cross_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --inter-load $INTER_LOAD --intra-bw $INTRA_BW --inter-bw $INTER_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o $MIXED_FLOW_FILE --flow-scale $FLOW_SCALE > $LOG_DIR/mixed_traffic_gen.log 2>&1
     if [ $? -eq 0 ]; then
         echo "Mixed traffic file generated successfully."
     else
@@ -172,6 +178,7 @@ screen -dmS intra_only bash -c "cd $(pwd) && python3 run_cross_dc.py \
     --dci-buffer $DCI_BUFFER \
     --cc $CC \
     --lb $LB \
+    --flow-scale $FLOW_SCALE \
     2>&1 | tee $LOG_DIR/intra_only.log"
 
 # start mixed simulation
@@ -189,6 +196,7 @@ screen -dmS mixed bash -c "cd $(pwd) && python3 run_cross_dc.py \
     --dci-buffer $DCI_BUFFER \
     --cc $CC \
     --lb $LB \
+    --flow-scale $FLOW_SCALE \
     2>&1 | tee $LOG_DIR/mixed.log"
 
 echo "Simulations started in background screen sessions."
@@ -197,3 +205,30 @@ echo "  screen -r intra_only  # For intra-datacenter only simulation"
 echo "  screen -r mixed       # For mixed simulation"
 echo "To detach from a session, press Ctrl+A followed by D"
 echo "Logs are being saved to $LOG_DIR/"
+
+# create a summary file in the log directory
+cat > "$LOG_DIR/simulation_summary.txt" << EOF
+Cross-datacenter Simulation Summary
+==================================
+Date and Time: $(date)
+Topology: $TOPO
+Topology File: $TOPO_FILE
+Intra-only Traffic File: $INTRA_FLOW_FILE
+Mixed Traffic File: $MIXED_FLOW_FILE
+
+Parameters:
+- Fat-tree K: $K_FAT
+- Number of datacenters: $NUM_DC
+- Simulation time: $SIMUL_TIME s
+- Intra-datacenter load: $INTRA_LOAD
+- Inter-datacenter load: $INTER_LOAD
+- Intra-datacenter bandwidth: $INTRA_BW Gbps
+- Inter-datacenter bandwidth: $INTER_BW Gbps
+- Buffer size: $BUFFER MB
+- DCI buffer size: $DCI_BUFFER MB
+- Congestion control: $CC
+- Load balancing: $LB
+- Flow scale factor: $FLOW_SCALE
+EOF
+
+echo "Summary information saved to $LOG_DIR/simulation_summary.txt"
