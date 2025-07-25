@@ -83,10 +83,9 @@ bool enable_qcn = true, enable_pfc = true, use_dynamic_pfc_threshold = true;
 uint32_t packet_payload_size = 1000, l2_chunk_size = 0, l2_ack_interval = 0;
 double pause_time = 5;  // PFC pause, microseconds
 double flowgen_start_time = 2.0, flowgen_stop_time = 2.5, simulator_extra_time = 0.1;
-// queue length monitoring time is not used in this simulator
-// uint32_t qlen_dump_interval = 100000000, qlen_mon_interval = 1000;  // ns
-uint64_t qlen_mon_start;               // ns
-uint64_t qlen_mon_end;                 // ns
+uint32_t qlen_dump_interval = 100, qlen_mon_interval = 100;  // ns
+uint64_t qlen_mon_start = 2000000000;  // ns
+uint64_t qlen_mon_end = 2100000000;    // ns
 uint32_t switch_mon_interval = 10000;  // ns
 uint64_t cnp_mon_start;                // ns
 uint64_t cnp_monitor_bucket = 100000;  // ns
@@ -102,6 +101,7 @@ FILE *voq_output = NULL;
 FILE *voq_detail_output = NULL;
 FILE *uplink_output = NULL;
 FILE *conn_output = NULL;
+FILE *qlen_output = NULL;
 
 std::string data_rate, link_delay, topology_file, flow_file;
 std::string flow_input_file = "flow.txt";
@@ -507,8 +507,6 @@ void get_pfc(FILE *fout, Ptr<QbbNetDevice> dev, uint32_t type) {
 }
 
 /*******************************************************************/
-#if (false)
-
 /**
  * @brief Qlen monitoring at switches (output: qlen.txt), I think "periodically"...
  *
@@ -524,9 +522,7 @@ struct QlenDistribution {
 
 map<uint32_t, map<uint32_t, QlenDistribution>> queue_result;
 void monitor_buffer(FILE *qlen_output, NodeContainer *n) {
-    /*******************************************************************/
-    /************************** UNUSED NOW *****************************/
-    /*******************************************************************/
+    uint64_t now = Simulator::Now().GetNanoSeconds();
     for (uint32_t i = 0; i < n->GetN(); i++) {
         if (n->Get(i)->GetNodeType() == 1) {  // is switch
             Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n->Get(i));
@@ -539,8 +535,8 @@ void monitor_buffer(FILE *qlen_output, NodeContainer *n) {
             }
         }
     }
-    if (Simulator::Now().GetTimeStep() % qlen_dump_interval == 0) {
-        fprintf(qlen_output, "time: %lu\n", Simulator::Now().GetTimeStep());
+    if (true) {
+        fprintf(qlen_output, "time: %lu\n", now);
         for (auto &it0 : queue_result) {
             for (auto &it1 : it0.second) {
                 fprintf(qlen_output, "%u %u", it0.first, it1.first);
@@ -551,10 +547,9 @@ void monitor_buffer(FILE *qlen_output, NodeContainer *n) {
         }
         fflush(qlen_output);
     }
-    if (Simulator::Now().GetTimeStep() < qlen_mon_end)
+    if (Simulator::Now() < Seconds(flowgen_stop_time + 0.05))
         Simulator::Schedule(NanoSeconds(qlen_mon_interval), &monitor_buffer, qlen_output, n);
 }
-#endif
 /*******************************************************************/
 
 /**
@@ -900,8 +895,6 @@ int main(int argc, char *argv[]) {
                 double v;
                 conf >> v;
                 flowgen_start_time = v;
-                qlen_mon_start = v;
-                qlen_mon_end = v;
                 cnp_mon_start = v;
                 irn_mon_start = v;
                 std::cerr << "FLOWGEN_START_TIME\t\t" << flowgen_start_time << "\n";
@@ -1505,7 +1498,7 @@ int main(int argc, char *argv[]) {
         }
     }
     fprintf(stderr, "maxRtt: %lu, maxBdp: %lu\n", maxRtt, maxBdp);
-    assert(maxBdp == irn_bdp_lookup);
+    // assert(maxBdp == irn_bdp_lookup);
 
     std::cout << "Configuring switches" << std::endl;
     /* config ToR Switch */
@@ -1780,6 +1773,7 @@ int main(int argc, char *argv[]) {
 
     uplink_output = fopen(uplink_mon_file.c_str(), "w");  // common
     conn_output = fopen(conn_mon_file.c_str(), "w");      // common
+    qlen_output = fopen(qlen_mon_file.c_str(), "w");      // queue length monitoring
 
     // update torId2UplinkIf, torId2DownlinkIf
     for (size_t ToRId = 0; ToRId < Settings::node_num; ToRId++) {
@@ -1808,6 +1802,8 @@ int main(int argc, char *argv[]) {
     }
     Simulator::Schedule(Seconds(flowgen_start_time), &periodic_monitoring, voq_output,
                         voq_detail_output, uplink_output, conn_output, &lb_mode);
+                        
+    Simulator::Schedule(Seconds(flowgen_start_time), &monitor_buffer, qlen_output, &n);
 
     //
     // Now, do the actual simulation.

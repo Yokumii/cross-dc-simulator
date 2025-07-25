@@ -1,0 +1,17 @@
+0.000820783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=100.00 Gbps new_rate=50.58 Gbps
+0.000828783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=50.58 Gbps new_rate=25.96 Gbps
+0.000832783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=25.96 Gbps new_rate=13.47 Gbps
+0.000836783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=13.47 Gbps new_rate=7.04 Gbps
+0.000840783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=7.04 Gbps new_rate=3.70 Gbps
+0.000848783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=3.70 Gbps new_rate=1.97 Gbps
+0.000852783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=1.97 Gbps new_rate=1.06 Gbps
+0.000856783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=1.06 Gbps new_rate=0.57 Gbps
+0.000860783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=0.57 Gbps new_rate=0.31 Gbps
+0.000868783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=0.31 Gbps new_rate=0.17 Gbps
+0.001168783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=0.17 Gbps new_rate=50.09 Gbps
+0.001224783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=50.09 Gbps new_rate=44.36 Gbps
+0.001228783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=44.36 Gbps new_rate=39.19 Gbps
+0.001240783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=39.19 Gbps new_rate=34.69 Gbps
+0.001248783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=34.69 Gbps new_rate=30.62 Gbps
+0.001252783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=30.62 Gbps new_rate=27.02 Gbps
+0.001256783 RATE_CHANGE flow_id=6 src=184549633:10001 dst=184551681:100 old_rate=27.02 Gbps new_rate=23.80 Gbps

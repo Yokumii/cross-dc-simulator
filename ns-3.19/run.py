@@ -347,8 +347,8 @@ def main():
         bw*200000000, 0.2, bw*500000000, 0.2, bw*1000000000, 0.2, bw*2*1000000000, 0.2, bw*2500000000, 0.2, bw*4*1000000000, 0.2)
 
     # queue monitoring
-    qlen_mon_start = flowgen_start_time
-    qlen_mon_end = flowgen_stop_time
+    qlen_mon_start = flowgen_start_time * 10e9
+    qlen_mon_end = flowgen_stop_time * 10e9
 
     if (cc_mode == 1):  # DCQCN
         ai = 10 * bw / 25

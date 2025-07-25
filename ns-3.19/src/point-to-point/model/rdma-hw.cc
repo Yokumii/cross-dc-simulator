@@ -559,6 +559,7 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
     }
     // ACK may advance the on-the-fly window, allowing more packets to send
     dev->TriggerTransmit();
+
     return 0;
 }
 
@@ -885,6 +886,9 @@ void RdmaHw::UpdateNextAvail(Ptr<RdmaQueuePair> qp, Time interframeGap, uint32_t
 }
 
 void RdmaHw::ChangeRate(Ptr<RdmaQueuePair> qp, DataRate new_rate) {
+    // 记录旧速率
+    DataRate old_rate = qp->m_rate;
+    
 #if 1
     Time sendingTime = Seconds(qp->m_rate.CalculateTxTime(qp->lastPktSize));
     Time new_sendintTime = Seconds(new_rate.CalculateTxTime(qp->lastPktSize));
@@ -896,6 +900,23 @@ void RdmaHw::ChangeRate(Ptr<RdmaQueuePair> qp, DataRate new_rate) {
 
     // change to new rate
     qp->m_rate = new_rate;
+    
+    // 检查速率是否有变化，如果有变化则记录
+    if (old_rate != new_rate) {
+        // 获取当前时间
+        double current_time = Simulator::Now().GetSeconds();
+        
+        // 记录信息：时间、流ID、源IP、目的IP、源端口、目的端口、旧速率、新速率
+        printf("%.9f RATE_CHANGE flow_id=%d src=%d:%d dst=%d:%d old_rate=%.2f Gbps new_rate=%.2f Gbps\n",
+               current_time,
+               qp->m_flow_id,
+               qp->sip.Get(),
+               qp->sport,
+               qp->dip.Get(),
+               qp->dport,
+               old_rate.GetBitRate() * 1e-9,  // 转换为Gbps
+               new_rate.GetBitRate() * 1e-9);  // 转换为Gbps
+    }
 }
 
 #define PRINT_LOG 0
@@ -937,7 +958,8 @@ void RdmaHw::cnp_received_mlx(Ptr<RdmaQueuePair> q) {
         // schedule rate decrease
         ScheduleDecreaseRateMlx(q, 1);  // add 1 ns to make sure rate decrease is after alpha update
         // set rate on first CNP
-        q->mlx.m_targetRate = q->m_rate = m_rateOnFirstCNP * q->m_rate;
+        q->mlx.m_targetRate = m_rateOnFirstCNP * q->m_rate;
+        ChangeRate(q, q->mlx.m_targetRate);
         q->mlx.m_first_cnp = false;
     }
 }
@@ -957,7 +979,8 @@ void RdmaHw::CheckRateDecreaseMlx(Ptr<RdmaQueuePair> q) {
         if (clamp) {
             q->mlx.m_targetRate = q->m_rate;
         }
-        q->m_rate = std::max(m_minRate, q->m_rate * (1 - q->mlx.m_alpha / 2));
+        DataRate new_rate = std::max(m_minRate, q->m_rate * (1 - q->mlx.m_alpha / 2));
+        ChangeRate(q, new_rate);
         // reset rate increase related things
         q->mlx.m_rpTimeStage = 0;
         q->mlx.m_decrease_cnp_arrived = false;
@@ -999,7 +1022,8 @@ void RdmaHw::FastRecoveryMlx(Ptr<RdmaQueuePair> q) {
            q->sip.Get(), q->dip.Get(), q->sport, q->dport, q->mlx.m_targetRate.GetBitRate() * 1e-9,
            q->m_rate.GetBitRate() * 1e-9);
 #endif
-    q->m_rate = (q->m_rate / 2) + (q->mlx.m_targetRate / 2);
+    DataRate new_rate = (q->m_rate / 2) + (q->mlx.m_targetRate / 2);
+    ChangeRate(q, new_rate);
 #if PRINT_LOG
     printf("(%.3lf %.3lf)\n", q->mlx.m_targetRate.GetBitRate() * 1e-9,
            q->m_rate.GetBitRate() * 1e-9);
@@ -1017,7 +1041,8 @@ void RdmaHw::ActiveIncreaseMlx(Ptr<RdmaQueuePair> q) {
     // increate rate
     q->mlx.m_targetRate += m_rai;
     if (q->mlx.m_targetRate > dev->GetDataRate()) q->mlx.m_targetRate = dev->GetDataRate();
-    q->m_rate = (q->m_rate / 2) + (q->mlx.m_targetRate / 2);
+    DataRate new_rate = (q->m_rate / 2) + (q->mlx.m_targetRate / 2);
+    ChangeRate(q, new_rate);
 #if PRINT_LOG
     printf("(%.3lf %.3lf)\n", q->mlx.m_targetRate.GetBitRate() * 1e-9,
            q->m_rate.GetBitRate() * 1e-9);
@@ -1035,7 +1060,8 @@ void RdmaHw::HyperIncreaseMlx(Ptr<RdmaQueuePair> q) {
     // increate rate
     q->mlx.m_targetRate += m_rhai;
     if (q->mlx.m_targetRate > dev->GetDataRate()) q->mlx.m_targetRate = dev->GetDataRate();
-    q->m_rate = (q->m_rate / 2) + (q->mlx.m_targetRate / 2);
+    DataRate new_rate = (q->m_rate / 2) + (q->mlx.m_targetRate / 2);
+    ChangeRate(q, new_rate);
 #if PRINT_LOG
     printf("(%.3lf %.3lf)\n", q->mlx.m_targetRate.GetBitRate() * 1e-9,
            q->m_rate.GetBitRate() * 1e-9);
@@ -1261,22 +1287,28 @@ void RdmaHw::UpdateRateTimely(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader
             if (c < 0) c = 0;
             inc = false;
         }
+        
+        DataRate new_rate;
         if (inc) {
             if (qp->tmly.m_incStage < 5) {
-                qp->m_rate = qp->tmly.m_curRate + m_rai;
+                new_rate = qp->tmly.m_curRate + m_rai;
             } else {
-                qp->m_rate = qp->tmly.m_curRate + m_rhai;
+                new_rate = qp->tmly.m_curRate + m_rhai;
             }
-            if (qp->m_rate > qp->m_max_rate) qp->m_rate = qp->m_max_rate;
-            if (!us) {
-                qp->tmly.m_curRate = qp->m_rate;
+            if (new_rate > qp->m_max_rate) new_rate = qp->m_max_rate;
+        } else {
+            new_rate = std::max(m_minRate, qp->tmly.m_curRate * c);
+        }
+        
+        ChangeRate(qp, new_rate);
+        
+        if (!us) {
+            if (inc) {
+                qp->tmly.m_curRate = new_rate;
                 qp->tmly.m_incStage++;
                 qp->tmly.rttDiff = rtt_diff;
-            }
-        } else {
-            qp->m_rate = std::max(m_minRate, qp->tmly.m_curRate * c);
-            if (!us) {
-                qp->tmly.m_curRate = qp->m_rate;
+            } else {
+                qp->tmly.m_curRate = new_rate;
                 qp->tmly.m_incStage = 0;
                 qp->tmly.rttDiff = rtt_diff;
             }
@@ -1341,7 +1373,8 @@ void RdmaHw::HandleAckDctcp(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &
         printf("%lu %s %08x %08x %u %u %.3lf->", Simulator::Now().GetTimeStep(), "rate",
                qp->sip.Get(), qp->dip.Get(), qp->sport, qp->dport, qp->m_rate.GetBitRate() * 1e-9);
 #endif
-        qp->m_rate = std::max(m_minRate, qp->m_rate * (1 - qp->dctcp.m_alpha / 2));
+        DataRate new_rate = std::max(m_minRate, qp->m_rate * (1 - qp->dctcp.m_alpha / 2));
+        ChangeRate(qp, new_rate);
 #if PRINT_LOG
         printf("%.3lf\n", qp->m_rate.GetBitRate() * 1e-9);
 #endif
@@ -1350,8 +1383,10 @@ void RdmaHw::HandleAckDctcp(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &
     }
 
     // additive inc
-    if (qp->dctcp.m_caState == 0 && new_batch)
-        qp->m_rate = std::min(qp->m_max_rate, qp->m_rate + m_dctcp_rai);
+    if (qp->dctcp.m_caState == 0 && new_batch) {
+        DataRate new_rate = std::min(qp->m_max_rate, qp->m_rate + m_dctcp_rai);
+        ChangeRate(qp, new_rate);
+    }
 }
 
 }  // namespace ns3
