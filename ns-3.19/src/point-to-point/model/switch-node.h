@@ -28,6 +28,11 @@ class SwitchNode : public Node {
     uint32_t m_ccMode;
     uint32_t m_ackHighPrio;  // set high priority for ACK/NACK
 
+    bool m_EdgeCnpEnabled;
+    uint32_t m_EdgeCnpInterval;
+    uint32_t m_EdgeCnpCount;
+    bool m_isDCISwitch;
+
    private:
     int GetOutDev(Ptr<Packet>, CustomHeader &ch);
     void SendToDev(Ptr<Packet> p, CustomHeader &ch);
@@ -35,6 +40,7 @@ class SwitchNode : public Node {
     static uint32_t EcmpHash(const uint8_t *key, size_t len, uint32_t seed);
     void CheckAndSendPfc(uint32_t inDev, uint32_t qIndex);
     void CheckAndSendResume(uint32_t inDev, uint32_t qIndex);
+    void CheckAndSendEdgeCNP(uint32_t inDev, uint32_t outDev, uint32_t qIndex, Ptr<const Packet> p, CustomHeader &ch);
 
     /* Sending packet to Egress port */
     void DoSwitchSend(Ptr<Packet> p, CustomHeader &ch, uint32_t outDev, uint32_t qIndex);
@@ -62,6 +68,7 @@ class SwitchNode : public Node {
     Ptr<SwitchMmu> m_mmu;
     bool m_isToR;                                 // true if ToR switch
     std::unordered_set<uint32_t> m_isToR_hostIP;  // host's IP connected to this ToR
+    std::unordered_map<uint32_t, Time> m_lastEdgeCnpTime;
 
     static TypeId GetTypeId(void);
     SwitchNode();
@@ -71,6 +78,9 @@ class SwitchNode : public Node {
     bool SwitchReceiveFromDevice(Ptr<NetDevice> device, Ptr<Packet> packet, CustomHeader &ch);
     void SwitchNotifyDequeue(uint32_t ifIndex, uint32_t qIndex, Ptr<Packet> p);
     uint64_t GetTxBytesOutDev(uint32_t outdev);
+    void AddHeader(Ptr<Packet> p, uint16_t protocolNumber);
+    uint16_t EtherToPpp(uint16_t proto);
+    bool IsCrossDcFlow(uint32_t sip, uint32_t dip);
 };
 
 } /* namespace ns3 */

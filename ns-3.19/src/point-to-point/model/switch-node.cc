@@ -14,7 +14,10 @@
 #include "ns3/settings.h"
 #include "ns3/uinteger.h"
 #include "ppp-header.h"
+#include "qbb-header.h"
 #include "qbb-net-device.h"
+#include "ns3/random-variable.h"
+#include "ns3/flow-id-num-tag.h"
 
 namespace ns3 {
 
@@ -30,7 +33,16 @@ TypeId SwitchNode::GetTypeId(void) {
                           MakeUintegerChecker<uint32_t>())
             .AddAttribute("AckHighPrio", "Set high priority for ACK/NACK or not", UintegerValue(0),
                           MakeUintegerAccessor(&SwitchNode::m_ackHighPrio),
-                          MakeUintegerChecker<uint32_t>());
+                          MakeUintegerChecker<uint32_t>())
+            .AddAttribute("EdgeCnpEnabled", "Enable Edge CNP generation at edge switches", BooleanValue(false),
+                          MakeBooleanAccessor(&SwitchNode::m_EdgeCnpEnabled),
+                          MakeBooleanChecker())
+            .AddAttribute("EdgeCnpInterval", "Minimum interval between CNPs for the same flow in microseconds", UintegerValue(4),
+                          MakeUintegerAccessor(&SwitchNode::m_EdgeCnpInterval),
+                          MakeUintegerChecker<uint32_t>())
+            .AddAttribute("IsDCISwitch", "Is this switch a DCI switch", BooleanValue(false),
+                          MakeBooleanAccessor(&SwitchNode::m_isDCISwitch),
+                          MakeBooleanChecker());
     return tid;
 }
 
@@ -53,6 +65,7 @@ SwitchNode::SwitchNode() {
     for (uint32_t i = 0; i < pCnt; i++) {
         m_txBytes[i] = 0;
     }
+    m_EdgeCnpCount = 0;
 }
 
 /**
@@ -182,6 +195,81 @@ void SwitchNode::CheckAndSendResume(uint32_t inDev, uint32_t qIndex) {
         device->SendPfc(qIndex, 1);
         m_mmu->SetResume(inDev, qIndex);
     }
+}
+
+void SwitchNode::CheckAndSendEdgeCNP(uint32_t inDev, uint32_t outDev, uint32_t qIndex, Ptr<const Packet> p, CustomHeader &ch) {
+    if (!m_EdgeCnpEnabled)
+        return;
+
+    if (!IsCrossDcFlow(ch.sip, ch.dip)) {
+        return;
+    }
+
+    bool shouldSendEdgeCnp = m_mmu->ShouldSendCN(outDev, qIndex);
+
+    if (!shouldSendEdgeCnp) return;
+
+    // 获取流ID
+    FlowIDNUMTag fit;
+    unsigned flowId;
+    if (p->PeekPacketTag(fit))
+        flowId = static_cast<unsigned>(fit.GetId());
+
+    if (m_lastEdgeCnpTime.find(flowId) != m_lastEdgeCnpTime.end() && Simulator::Now() - m_lastEdgeCnpTime[flowId] < MicroSeconds(m_EdgeCnpInterval)) {
+        return;
+    }
+    
+    Ptr<QbbNetDevice> device = DynamicCast<QbbNetDevice>(m_devices[inDev]);
+    if (!device)
+        return;
+
+    qbbHeader seqh;
+    seqh.SetPG(ch.udp.pg);  // 使用原始数据包的优先级组
+    seqh.SetSport(ch.udp.dport);  // 目的端口作为源端口
+    seqh.SetDport(ch.udp.sport);  // 源端口作为目的端口
+    seqh.SetCnp();  // 设置CNP标志
+
+    // 添加INT头部（如果原始数据包有）
+    if (ch.l3Prot == 0x11) {  // UDP
+        seqh.SetIntHeader(ch.udp.ih);
+    }
+
+    Ptr<Packet> cnp = Create<Packet>(std::max(60 - 14 - 20 - (int)seqh.GetSerializedSize(), 0));
+    
+    // 添加qbbHeader到包中
+    cnp->AddHeader(seqh);
+    
+    // 创建IP头部
+    Ipv4Header ipv4h;
+    ipv4h.SetProtocol(0xFD);  // 使用NACK协议号，因为CNP通常与NACK一起发送
+    ipv4h.SetSource(Ipv4Address(ch.dip));  // 使用原始目的IP作为源IP
+    ipv4h.SetDestination(Ipv4Address(ch.sip));  // 使用原始源IP作为目的IP
+    ipv4h.SetTtl(64);
+    ipv4h.SetPayloadSize(cnp->GetSize());
+    ipv4h.SetIdentification(UniformVariable(0, 65536).GetValue());   // 随机生成 Identification 字段
+
+    // 添加IP头部到包中
+    cnp->AddHeader(ipv4h);
+
+    if (p->PeekPacketTag(fit)) {
+        cnp->AddPacketTag(fit);
+    }
+    
+    // 添加PPP头部
+    AddHeader(cnp, 0x800);
+    
+    // 解析自定义头部以便发送
+    CustomHeader cnp_ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+    cnp->PeekHeader(cnp_ch);
+    
+    device->SwitchSend(0, cnp, cnp_ch);
+    std::cout << "Edge CNP sent: flow = " << flowId << " at time = " << Simulator::Now().GetSeconds() << std::endl;
+
+    // 更新统计和时间记录
+    m_EdgeCnpCount++;
+    m_lastEdgeCnpTime[flowId] = Simulator::Now();
+    
+    return;
 }
 
 /********************************************
@@ -351,6 +439,12 @@ void SwitchNode::SwitchNotifyDequeue(uint32_t ifIndex, uint32_t qIndex, Ptr<Pack
                 h.SetEcn((Ipv4Header::EcnType)0x03);
                 p->AddHeader(h);
                 p->AddHeader(ppp);
+
+                if (inDev != Settings::CONWEAVE_CTRL_DUMMY_INDEV && m_isDCISwitch) {
+                    CustomHeader ch;
+                    p->PeekHeader(ch);
+                    CheckAndSendEdgeCNP(inDev, ifIndex, qIndex, p, ch);
+                }
             }
         }
         // NOTE: ConWeave's probe/reply does not need to pass inDev interface
@@ -425,6 +519,29 @@ void SwitchNode::ClearTable() { m_rtTable.clear(); }
 uint64_t SwitchNode::GetTxBytesOutDev(uint32_t outdev) {
     assert(outdev < pCnt);
     return m_txBytes[outdev];
+}
+
+void SwitchNode::AddHeader(Ptr<Packet> p, uint16_t protocolNumber) {
+    PppHeader ppp;
+    ppp.SetProtocol(EtherToPpp(protocolNumber));
+    p->AddHeader(ppp);
+}
+
+uint16_t SwitchNode::EtherToPpp(uint16_t proto) {
+    switch (proto) {
+        case 0x0800:
+            return 0x0021;  // IPv4
+        case 0x86DD:
+            return 0x0057;  // IPv6
+        default:
+            NS_ASSERT_MSG(false, "PPP Protocol number not defined!");
+    }
+    return 0;
+}
+
+bool SwitchNode::IsCrossDcFlow(uint32_t sip, uint32_t dip) {
+    // TODO: 这里事实上简化了实现，仅考虑 k = 4, overscript = 2 的两个数据中心拓扑结构
+    return (sip / 53) != (dip / 53);
 }
 
 } /* namespace ns3 */
