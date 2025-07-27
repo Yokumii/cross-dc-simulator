@@ -375,6 +375,14 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
         newp->AddHeader(head);
         AddHeader(newp, 0x800);  // Attach PPP header
 
+        // if (ecnbits || cnp_check) {
+        //     std::cout << "CNP sent:"
+        //       << " src = " << ch.sip << " dst = " << ch.dip 
+        //       << " sport = " << ch.udp.sport << " dport = " << ch.udp.dport
+        //       << " pg = " << (int)ch.udp.pg
+        //       << " at time = " << Simulator::Now().GetSeconds() << std::endl;
+        // }
+
         // send
         uint32_t nic_idx = GetNicIdxOfRxQp(rxQp);
         m_nic[nic_idx].dev->RdmaEnqueueHighPrioQ(newp);

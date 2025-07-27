@@ -68,7 +68,7 @@ class SwitchNode : public Node {
     Ptr<SwitchMmu> m_mmu;
     bool m_isToR;                                 // true if ToR switch
     std::unordered_set<uint32_t> m_isToR_hostIP;  // host's IP connected to this ToR
-    std::unordered_map<uint32_t, Time> m_lastEdgeCnpTime;
+    std::unordered_map<uint64_t, Time> m_lastEdgeCnpTime;
 
     static TypeId GetTypeId(void);
     SwitchNode();

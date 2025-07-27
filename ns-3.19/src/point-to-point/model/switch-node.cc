@@ -209,13 +209,13 @@ void SwitchNode::CheckAndSendEdgeCNP(uint32_t inDev, uint32_t outDev, uint32_t q
 
     if (!shouldSendEdgeCnp) return;
 
-    // 获取流ID
-    FlowIDNUMTag fit;
-    unsigned flowId;
-    if (p->PeekPacketTag(fit))
-        flowId = static_cast<unsigned>(fit.GetId());
+    uint64_t flowKey = ((uint64_t)ch.sip << 32) | ((uint64_t)ch.dip) | 
+                       ((uint64_t)ch.udp.sport << 16) | ((uint64_t)ch.udp.dport) | 
+                       ((uint64_t)ch.udp.pg);
 
-    if (m_lastEdgeCnpTime.find(flowId) != m_lastEdgeCnpTime.end() && Simulator::Now() - m_lastEdgeCnpTime[flowId] < MicroSeconds(m_EdgeCnpInterval)) {
+    // 检查是否需要限制CNP发送频率
+    if (m_lastEdgeCnpTime.find(flowKey) != m_lastEdgeCnpTime.end() && 
+        Simulator::Now() - m_lastEdgeCnpTime[flowKey] < MicroSeconds(m_EdgeCnpInterval)) {
         return;
     }
     
@@ -224,6 +224,7 @@ void SwitchNode::CheckAndSendEdgeCNP(uint32_t inDev, uint32_t outDev, uint32_t q
         return;
 
     qbbHeader seqh;
+    seqh.SetSeq(UINT32_MAX); 
     seqh.SetPG(ch.udp.pg);  // 使用原始数据包的优先级组
     seqh.SetSport(ch.udp.dport);  // 目的端口作为源端口
     seqh.SetDport(ch.udp.sport);  // 源端口作为目的端口
@@ -241,7 +242,7 @@ void SwitchNode::CheckAndSendEdgeCNP(uint32_t inDev, uint32_t outDev, uint32_t q
     
     // 创建IP头部
     Ipv4Header ipv4h;
-    ipv4h.SetProtocol(0xFD);  // 使用NACK协议号，因为CNP通常与NACK一起发送
+    ipv4h.SetProtocol(0xFC);  // 使用NACK协议号，因为CNP通常与NACK一起发送
     ipv4h.SetSource(Ipv4Address(ch.dip));  // 使用原始目的IP作为源IP
     ipv4h.SetDestination(Ipv4Address(ch.sip));  // 使用原始源IP作为目的IP
     ipv4h.SetTtl(64);
@@ -251,6 +252,7 @@ void SwitchNode::CheckAndSendEdgeCNP(uint32_t inDev, uint32_t outDev, uint32_t q
     // 添加IP头部到包中
     cnp->AddHeader(ipv4h);
 
+    FlowIDNUMTag fit;
     if (p->PeekPacketTag(fit)) {
         cnp->AddPacketTag(fit);
     }
@@ -258,16 +260,16 @@ void SwitchNode::CheckAndSendEdgeCNP(uint32_t inDev, uint32_t outDev, uint32_t q
     // 添加PPP头部
     AddHeader(cnp, 0x800);
     
-    // 解析自定义头部以便发送
-    CustomHeader cnp_ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
-    cnp->PeekHeader(cnp_ch);
-    
-    device->SwitchSend(0, cnp, cnp_ch);
-    std::cout << "Edge CNP sent: flow = " << flowId << " at time = " << Simulator::Now().GetSeconds() << std::endl;
+    device->SwitchSend(0, cnp, ch);
+    // std::cout << "Edge CNP sent:"
+    //           << " src = " << ch.sip << " dst = " << ch.dip 
+    //           << " sport = " << ch.udp.sport << " dport = " << ch.udp.dport
+    //           << " pg = " << (int)ch.udp.pg
+    //           << " at time = " << Simulator::Now().GetSeconds() << std::endl;
 
     // 更新统计和时间记录
     m_EdgeCnpCount++;
-    m_lastEdgeCnpTime[flowId] = Simulator::Now();
+    m_lastEdgeCnpTime[flowKey] = Simulator::Now();
     
     return;
 }
@@ -441,7 +443,7 @@ void SwitchNode::SwitchNotifyDequeue(uint32_t ifIndex, uint32_t qIndex, Ptr<Pack
                 p->AddHeader(ppp);
 
                 if (inDev != Settings::CONWEAVE_CTRL_DUMMY_INDEV && m_isDCISwitch) {
-                    CustomHeader ch;
+                    CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
                     p->PeekHeader(ch);
                     CheckAndSendEdgeCNP(inDev, ifIndex, qIndex, p, ch);
                 }

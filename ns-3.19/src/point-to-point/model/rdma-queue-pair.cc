@@ -121,7 +121,7 @@ uint32_t RdmaQueuePair::GetHash(void) {
 }
 
 void RdmaQueuePair::Acknowledge(uint64_t ack) {
-    if (ack > snd_una) {
+    if (ack > snd_una && ack != UINT32_MAX) {
         snd_una = ack;
     }
 }
