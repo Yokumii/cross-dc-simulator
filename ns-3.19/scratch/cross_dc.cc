@@ -143,6 +143,8 @@ uint32_t link_down_A = 0, link_down_B = 0;
 uint32_t buffer_size = 0;  // 0 to set buffer size automatically
 uint32_t dci_buffer_size = 0;  // dci-switch buffer size
 std::vector<uint32_t> dci_switch_ids;  // dci-switch id
+bool enable_edge_cnp = false;
+uint32_t edge_cnp_interval = 4;
 
 // Added from Here
 double load = 10.0;
@@ -1052,6 +1054,12 @@ int main(int argc, char *argv[]) {
                     std::cerr << ' ' << id;
                 }
                 std::cerr << '\n';
+            } else if (key.compare("ENABLE_EDGE_CNP") == 0) {
+                conf >> enable_edge_cnp;
+                std::cerr << "ENABLE_EDGE_CNP\t\t\t\t" << enable_edge_cnp << '\n';
+            } else if (key.compare("EDGE_CNP_INTERVAL") == 0) {
+                conf >> edge_cnp_interval;
+                std::cerr << "EDGE_CNP_INTERVAL\t\t\t\t" << edge_cnp_interval << '\n';
             } else if (key.compare("QLEN_MON_FILE") == 0) {
                 conf >> qlen_mon_file;
                 std::cerr << "QLEN_MON_FILE\t\t\t\t" << qlen_mon_file << '\n';
@@ -1472,6 +1480,32 @@ int main(int argc, char *argv[]) {
             Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n.Get(i));
             sw->SetAttribute("CcMode", UintegerValue(cc_mode));
             sw->SetAttribute("AckHighPrio", UintegerValue(1));
+        }
+    }
+
+    /**
+     * @brief setup switch's edge CNP
+     */
+    if (enable_edge_cnp) {
+        for (uint32_t i = 0; i < node_num; i++) {
+            if (n.Get(i)->GetNodeType() == 1) {  // switch
+                Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n.Get(i));
+                sw->SetAttribute("EdgeCnpInterval", UintegerValue(edge_cnp_interval));
+                sw->SetAttribute("EdgeCnpEnabled", BooleanValue(true));
+                bool is_dci_switch = false;
+                for (auto dci_id : dci_switch_ids) {
+                    if (sw->GetId() == dci_id) {
+                        is_dci_switch = true;
+                        break;
+                    }
+                }
+                if (is_dci_switch) {
+                    sw->SetAttribute("IsDCISwitch", BooleanValue(true));
+                }
+                else {
+                    sw->SetAttribute("IsDCISwitch", BooleanValue(false));
+                }
+            }
         }
     }
 

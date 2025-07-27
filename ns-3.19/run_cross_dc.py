@@ -42,6 +42,8 @@ FLOWGEN_STOP_TIME {flowgen_stop_time}
 BUFFER_SIZE {buffer_size}
 DCI_BUFFER_SIZE {dci_buffer_size}
 DCI_SWITCH_IDS {dci_switch_ids}
+ENABLE_EDGE_CNP {enable_edge_cnp}
+EDGE_CNP_INTERVAL 4
 
 CC_MODE {cc_mode}
 LB_MODE {lb_mode}
@@ -150,6 +152,8 @@ def main():
                       type=int, default=2, help="Number of datacenters (default: 2)")
     parser.add_argument('--dci-buffer', dest='dci_buffer', action='store',
                       type=int, default=128, help="DCI switch buffer size (MB) (default: 128)")
+    parser.add_argument('--enable-edge-cnp', dest='enable_edge_cnp', action='store',
+                        type=int, default=0, help="enable edge CNP (default: 0)")
     parser.add_argument('--intra-load', dest='intra_load', action='store',
                       type=float, default=0.5, help="Intra-datacenter load (default: 0.5)")
     parser.add_argument('--inter-load', dest='inter_load', action='store',
@@ -181,6 +185,7 @@ def main():
     enabled_irn = int(args.irn)
     buffer = args.buffer
     dci_buffer = args.dci_buffer
+    enable_edge_cnp = int(args.enable_edge_cnp)
     enforce_win = args.enforce_win
     cdf = args.cdf
     flowgen_start_time = FLOWGEN_DEFAULT_TIME
@@ -355,6 +360,7 @@ def main():
             buffer_size=buffer,
             dci_buffer_size=dci_buffer,
             dci_switch_ids=f"{len(dci_switch_ids)} {' '.join(map(str, dci_switch_ids))}",
+            enable_edge_cnp=enable_edge_cnp,
             lb_mode=lb_mode,
             enabled_pfc=enabled_pfc,
             enabled_irn=enabled_irn,
