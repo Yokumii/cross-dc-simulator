@@ -194,8 +194,8 @@ def main():
     ax.yaxis.set_ticks_position('left')
     ax.xaxis.set_ticks_position('bottom')
     
-    ax.plot(xvals, intra_result["avg"], markersize=4.0, linewidth=2.0, label="intra_only")
-    ax.plot(xvals, mixed_result["avg"], markersize=4.0, linewidth=2.0, label="mixed")
+    ax.plot(xvals, intra_result["avg"], markersize=4.0, linewidth=2.0, label="enable_edge_cnp")
+    ax.plot(xvals, mixed_result["avg"], markersize=4.0, linewidth=2.0, label="disable_edge_cnp")
     
     ax.legend(loc="best", frameon=False, fontsize=12)
     
@@ -224,8 +224,8 @@ def main():
     ax.yaxis.set_ticks_position('left')
     ax.xaxis.set_ticks_position('bottom')
     
-    ax.plot(xvals, intra_result["p99"], markersize=4.0, linewidth=2.0, label="intra_only")
-    ax.plot(xvals, mixed_result["p99"], markersize=4.0, linewidth=2.0, label="mixed")
+    ax.plot(xvals, intra_result["p99"], markersize=4.0, linewidth=2.0, label="enable_edge_cnp")
+    ax.plot(xvals, mixed_result["p99"], markersize=4.0, linewidth=2.0, label="disable_edge_cnp")
     
     ax.legend(loc="best", frameon=False, fontsize=12)
     
@@ -254,8 +254,8 @@ def main():
     ax.yaxis.set_ticks_position('left')
     ax.xaxis.set_ticks_position('bottom')
     
-    ax.plot(xvals, intra_result["p50"], markersize=4.0, linewidth=2.0, label="intra_only")
-    ax.plot(xvals, mixed_result["p50"], markersize=4.0, linewidth=2.0, label="mixed")
+    ax.plot(xvals, intra_result["p50"], markersize=4.0, linewidth=2.0, label="enable_edge_cnp")
+    ax.plot(xvals, mixed_result["p50"], markersize=4.0, linewidth=2.0, label="disable_edge_cnp")
     
     ax.legend(loc="best", frameon=False, fontsize=12)
     
@@ -281,8 +281,8 @@ def main():
     ax1.set_ylabel("average FCT slowdown", fontsize=11.5)
     ax1.spines['top'].set_visible(False)
     ax1.spines['right'].set_visible(False)
-    ax1.plot(xvals, intra_result["avg"], markersize=3.0, linewidth=2.0, label="intra_only")
-    ax1.plot(xvals, mixed_result["avg"], markersize=3.0, linewidth=2.0, label="mixed")
+    ax1.plot(xvals, intra_result["avg"], markersize=3.0, linewidth=2.0, label="enable_edge_cnp")
+    ax1.plot(xvals, mixed_result["avg"], markersize=3.0, linewidth=2.0, label="disable_edge_cnp")
     ax1.legend(loc="best", frameon=False, fontsize=10)
     ax1.tick_params(axis="x", rotation=40)
     ax1.set_xticks(([0] + xvals)[::4])
@@ -297,8 +297,8 @@ def main():
     ax2.set_ylabel("p50 FCT slowdown", fontsize=11.5)
     ax2.spines['top'].set_visible(False)
     ax2.spines['right'].set_visible(False)
-    ax2.plot(xvals, intra_result["p50"], markersize=3.0, linewidth=2.0, label="intra_only")
-    ax2.plot(xvals, mixed_result["p50"], markersize=3.0, linewidth=2.0, label="mixed")
+    ax2.plot(xvals, intra_result["p50"], markersize=3.0, linewidth=2.0, label="enable_edge_cnp")
+    ax2.plot(xvals, mixed_result["p50"], markersize=3.0, linewidth=2.0, label="disable_edge_cnp")
     ax2.legend(loc="best", frameon=False, fontsize=10)
     ax2.tick_params(axis="x", rotation=40)
     ax2.set_xticks(([0] + xvals)[::4])
@@ -313,8 +313,8 @@ def main():
     ax3.set_ylabel("p99 FCT slowdown", fontsize=11.5)
     ax3.spines['top'].set_visible(False)
     ax3.spines['right'].set_visible(False)
-    ax3.plot(xvals, intra_result["p99"], markersize=3.0, linewidth=2.0, label="intra_only")
-    ax3.plot(xvals, mixed_result["p99"], markersize=3.0, linewidth=2.0, label="mixed")
+    ax3.plot(xvals, intra_result["p99"], markersize=3.0, linewidth=2.0, label="enable_edge_cnp")
+    ax3.plot(xvals, mixed_result["p99"], markersize=3.0, linewidth=2.0, label="disable_edge_cnp")
     ax3.legend(loc="best", frameon=False, fontsize=10)
     ax3.tick_params(axis="x", rotation=40)
     ax3.set_xticks(([0] + xvals)[::4])

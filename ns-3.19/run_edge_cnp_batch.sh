@@ -117,7 +117,7 @@ if [ -f "$TOPO_FILE" ]; then
     echo "Topology file $TOPO_FILE already exists, skipping generation."
 else
     echo "Generating topology file $TOPO_FILE..."
-    python3 config/cross_dc_topology_gen.py $K_FAT 2 $NUM_DC $INTRA_BW 0.01 $INTER_BW 4 > $LOG_DIR/topology_gen.log 2>&1
+    python3 config/cross_dc_topology_gen.py $K_FAT 2 $NUM_DC $INTRA_BW 0.0001 $INTER_BW 0.04 > $LOG_DIR/topology_gen.log 2>&1
     if [ $? -eq 0 ]; then
         echo "Topology file generated successfully."
     else
