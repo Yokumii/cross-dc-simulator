@@ -135,7 +135,7 @@ if [ -f "$INTRA_FLOW_FILE" ]; then
     echo "Intra-only traffic file $INTRA_FLOW_FILE already exists, skipping generation."
 else
     echo "Generating intra-only traffic file $INTRA_FLOW_FILE..."
-    (cd "$SIM_DIR" && python3 traffic_gen/intra_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --intra-bw $INTRA_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o "$INTRA_FLOW_FILE" --flow-scale $FLOW_SCALE)
+    (cd "$SIM_DIR" && python3 ../tools/traffic_gen/intra_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --intra-bw $INTRA_BW -t $SIMUL_TIME -c ../tools/traffic_gen/AliStorage2019.txt -o "$INTRA_FLOW_FILE" --flow-scale $FLOW_SCALE)
     if [ $? -eq 0 ]; then
         echo "Intra-only traffic file generated successfully."
     else
@@ -149,7 +149,7 @@ if [ -f "$MIXED_FLOW_FILE" ]; then
     echo "Mixed traffic file $MIXED_FLOW_FILE already exists, skipping generation."
 else
     echo "Generating mixed traffic file $MIXED_FLOW_FILE..."
-    (cd "$SIM_DIR" && python3 traffic_gen/cross_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --inter-load $INTER_LOAD --intra-bw $INTRA_BW --inter-bw $INTER_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o "$MIXED_FLOW_FILE" --flow-scale $FLOW_SCALE)
+    (cd "$SIM_DIR" && python3 ../tools/traffic_gen/cross_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --inter-load $INTER_LOAD --intra-bw $INTRA_BW --inter-bw $INTER_BW -t $SIMUL_TIME -c ../tools/traffic_gen/AliStorage2019.txt -o "$MIXED_FLOW_FILE" --flow-scale $FLOW_SCALE)
     if [ $? -eq 0 ]; then
         echo "Mixed traffic file generated successfully."
     else

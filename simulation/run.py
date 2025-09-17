@@ -224,16 +224,16 @@ def main():
             load=hostload, cdf=cdf, n_host=n_host))
     else:  # make the input traffic file
         print("Generate a input traffic file...")
-        print("python ./traffic_gen/traffic_gen.py -c {cdf} -n {n_host} -l {load} -b {bw} -t {time} -o {output}".format(
-            cdf=os.getcwd() + "/../traffic_gen/" + args.cdf + ".txt",
+        print("python ../tools/traffic_gen/traffic_gen.py -c {cdf} -n {n_host} -l {load} -b {bw} -t {time} -o {output}".format(
+            cdf=os.getcwd() + "/../tools/traffic_gen/" + args.cdf + ".txt",
             n_host=n_host,
             load=hostload / 100.0,
             bw=args.bw + "G",
             time=args.simul_time,
             output=os.getcwd() + "/config/" + flow + ".txt"))
 
-        os.system("python ./traffic_gen/traffic_gen.py -c {cdf} -n {n_host} -l {load} -b {bw} -t {time} -o {output}".format(
-            cdf=os.getcwd() + "/traffic_gen/" + args.cdf + ".txt",
+        os.system("python ../tools/traffic_gen/traffic_gen.py -c {cdf} -n {n_host} -l {load} -b {bw} -t {time} -o {output}".format(
+            cdf=os.getcwd() + "/../tools/traffic_gen/" + args.cdf + ".txt",
             n_host=n_host,
             load=hostload / 100.0,
             bw=args.bw + "G",

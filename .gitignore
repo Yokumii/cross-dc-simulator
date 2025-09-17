@@ -1,5 +1,5 @@
 *.tr
-*.txt
+results/*
 *.log
 .vscode/*
 **/*.pyc

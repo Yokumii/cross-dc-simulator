@@ -141,9 +141,9 @@ if [ -f "$FLOW_FILE" ]; then
 else
     echo "Generating $TRAFFIC_TYPE traffic file $FLOW_FILE..."
     if [ "$TRAFFIC_TYPE" == "mixed" ]; then
-        (cd "$SIM_DIR" && python3 traffic_gen/cross_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --inter-load $INTER_LOAD --intra-bw $INTRA_BW --inter-bw $INTER_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o "$FLOW_FILE" --flow-scale $FLOW_SCALE)
+        (cd "$SIM_DIR" && python3 ../tools/traffic_gen/cross_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --inter-load $INTER_LOAD --intra-bw $INTRA_BW --inter-bw $INTER_BW -t $SIMUL_TIME -c ../tools/traffic_gen/AliStorage2019.txt -o "$FLOW_FILE" --flow-scale $FLOW_SCALE)
     else
-        (cd "$SIM_DIR" && python3 traffic_gen/intra_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --intra-bw $INTRA_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o "$FLOW_FILE" --flow-scale $FLOW_SCALE)
+        (cd "$SIM_DIR" && python3 ../tools/traffic_gen/intra_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --intra-bw $INTRA_BW -t $SIMUL_TIME -c ../tools/traffic_gen/AliStorage2019.txt -o "$FLOW_FILE" --flow-scale $FLOW_SCALE)
     fi
     
     if [ $? -eq 0 ]; then
@@ -209,10 +209,10 @@ echo "To attach to the sessions, use:"
 echo "  screen -r without_edgecnp  # For simulation without EdgeCNP"
 echo "  screen -r with_edgecnp     # For simulation with EdgeCNP"
 echo "To detach from a session, press Ctrl+A followed by D"
-echo "Logs are being saved to $LOG_DIR/"
+echo "Outputs will be archived to $RUN_DIR"
 
 # create a summary file in the log directory
-cat > "$LOG_DIR/simulation_summary.txt" << EOF
+cat > "$RUN_DIR/simulation_summary.txt" << EOF
 Cross-datacenter Simulation Summary
 ==================================
 Date and Time: $(date)

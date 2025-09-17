@@ -246,10 +246,12 @@ def main():
     flow_path = f"config/{flow_file}"
     
     if not os.path.exists(flow_path):
+        # traffic_gen moved to tools/traffic_gen at repo root; simulation/ is one level deeper
+        gen_root = "../tools/traffic_gen"
         if args.traffic_type == "mixed":
-            os.system(f"python3 traffic_gen/cross_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --inter-load {args.inter_load} --intra-bw {args.intra_bw} --inter-bw {args.inter_bw} -t {args.simul_time} -c traffic_gen/AliStorage2019.txt -o {flow_path} --flow-scale {args.flow_scale}")
+            os.system(f"python3 {gen_root}/cross_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --inter-load {args.inter_load} --intra-bw {args.intra_bw} --inter-bw {args.inter_bw} -t {args.simul_time} -c {gen_root}/AliStorage2019.txt -o {flow_path} --flow-scale {args.flow_scale}")
         else:  # intra_only
-            os.system(f"python3 traffic_gen/intra_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --intra-bw {args.intra_bw} -t {args.simul_time} -c traffic_gen/AliStorage2019.txt -o {flow_path} --flow-scale {args.flow_scale}")
+            os.system(f"python3 {gen_root}/intra_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --intra-bw {args.intra_bw} -t {args.simul_time} -c {gen_root}/AliStorage2019.txt -o {flow_path} --flow-scale {args.flow_scale}")
         print(f"Traffic file generated: {flow_path}")
     else:
         print(f"Using existing traffic file: {flow_path}")
