@@ -102,22 +102,25 @@ echo "Load balancing: $LB"
 echo "Flow scale factor: $FLOW_SCALE"
 echo "Traffic type: $TRAFFIC_TYPE"
 
-# create log directory
+ROOT_DIR="$(cd "$(dirname "$0")"/.. && pwd)"
+SIM_DIR="${ROOT_DIR}/simulation"
+RESULTS_ROOT="${ROOT_DIR}/results"
+SCRIPT_TAG="run_edge_cnp_batch"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_DIR="simulation_logs_${TIMESTAMP}"
-mkdir -p $LOG_DIR
+RUN_DIR="${RESULTS_ROOT}/${SCRIPT_TAG}_${TIMESTAMP}"
+mkdir -p "${RUN_DIR}"
 
 # define file paths
 TOPO="cross_dc_k${K_FAT}_dc${NUM_DC}_os2"
-TOPO_FILE="config/${TOPO}.txt"
-FLOW_FILE="config/${TOPO}_${TRAFFIC_TYPE}_flow.txt"
+TOPO_FILE="${SIM_DIR}/config/${TOPO}.txt"
+FLOW_FILE="${SIM_DIR}/config/${TOPO}_${TRAFFIC_TYPE}_flow.txt"
 
 # check and generate topology file if needed
 if [ -f "$TOPO_FILE" ]; then
     echo "Topology file $TOPO_FILE already exists, skipping generation."
 else
     echo "Generating topology file $TOPO_FILE..."
-    python3 config/cross_dc_topology_gen.py $K_FAT 2 $NUM_DC $INTRA_BW 0.0001 $INTER_BW 0.04 > $LOG_DIR/topology_gen.log 2>&1
+    (cd "$SIM_DIR" && python3 config/cross_dc_topology_gen.py $K_FAT 2 $NUM_DC $INTRA_BW 0.0001 $INTER_BW 0.04)
     if [ $? -eq 0 ]; then
         echo "Topology file generated successfully."
     else
@@ -138,9 +141,9 @@ if [ -f "$FLOW_FILE" ]; then
 else
     echo "Generating $TRAFFIC_TYPE traffic file $FLOW_FILE..."
     if [ "$TRAFFIC_TYPE" == "mixed" ]; then
-        python3 traffic_gen/cross_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --inter-load $INTER_LOAD --intra-bw $INTRA_BW --inter-bw $INTER_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o $FLOW_FILE --flow-scale $FLOW_SCALE > $LOG_DIR/traffic_gen.log 2>&1
+        (cd "$SIM_DIR" && python3 traffic_gen/cross_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --inter-load $INTER_LOAD --intra-bw $INTRA_BW --inter-bw $INTER_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o "$FLOW_FILE" --flow-scale $FLOW_SCALE)
     else
-        python3 traffic_gen/intra_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --intra-bw $INTRA_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o $FLOW_FILE --flow-scale $FLOW_SCALE > $LOG_DIR/traffic_gen.log 2>&1
+        (cd "$SIM_DIR" && python3 traffic_gen/intra_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --intra-bw $INTRA_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o "$FLOW_FILE" --flow-scale $FLOW_SCALE)
     fi
     
     if [ $? -eq 0 ]; then
@@ -160,9 +163,12 @@ fi
 echo "All required files are ready. Starting simulations..."
 sleep 1
 
+# 记录运行前已有的输出ID
+pre_ids=$(ls -1 "${SIM_DIR}/mix/output" 2>/dev/null || true)
+
 # start simulation without EdgeCNP
 echo "Starting simulation WITHOUT EdgeCNP..."
-screen -dmS without_edgecnp bash -c "cd $(pwd) && python3 run_cross_dc.py \
+screen -dmS without_edgecnp bash -c "cd ${SIM_DIR} && python3 run_cross_dc.py \
     --traffic-type $TRAFFIC_TYPE \
     --k-fat $K_FAT \
     --num-dc $NUM_DC \
@@ -177,11 +183,11 @@ screen -dmS without_edgecnp bash -c "cd $(pwd) && python3 run_cross_dc.py \
     --lb $LB \
     --flow-scale $FLOW_SCALE \
     --enable-edge-cnp 0 \
-    2>&1 | tee $LOG_DIR/without_edgecnp.log"
+    2>&1 | cat"
 
 # start simulation with EdgeCNP
 echo "Starting simulation WITH EdgeCNP..."
-screen -dmS with_edgecnp bash -c "cd $(pwd) && python3 run_cross_dc.py \
+screen -dmS with_edgecnp bash -c "cd ${SIM_DIR} && python3 run_cross_dc.py \
     --traffic-type $TRAFFIC_TYPE \
     --k-fat $K_FAT \
     --num-dc $NUM_DC \
@@ -196,7 +202,7 @@ screen -dmS with_edgecnp bash -c "cd $(pwd) && python3 run_cross_dc.py \
     --lb $LB \
     --flow-scale $FLOW_SCALE \
     --enable-edge-cnp 1 \
-    2>&1 | tee $LOG_DIR/with_edgecnp.log"
+    2>&1 | cat"
 
 echo "Simulations started in background screen sessions."
 echo "To attach to the sessions, use:"
@@ -234,4 +240,17 @@ Comparison:
 - Simulation 2: WITH EdgeCNP (--enable-edge-cnp 1)
 EOF
 
-echo "Summary information saved to $LOG_DIR/simulation_summary.txt"
+echo "Summary information saved to $RUN_DIR/simulation_summary.txt"
+
+# 移动新增的输出ID到 RUN_DIR
+post_ids=$(ls -1 "${SIM_DIR}/mix/output" 2>/dev/null || true)
+for id in ${post_ids}; do
+  if ! echo "${pre_ids}" | grep -qx "${id}"; then
+    if [ -d "${SIM_DIR}/mix/output/${id}" ]; then
+      mkdir -p "${RUN_DIR}/outputs"
+      mv "${SIM_DIR}/mix/output/${id}" "${RUN_DIR}/outputs/" 2>/dev/null || cp -r "${SIM_DIR}/mix/output/${id}" "${RUN_DIR}/outputs/"
+    fi
+  fi
+done
+
+echo "Outputs saved to: ${RUN_DIR}"

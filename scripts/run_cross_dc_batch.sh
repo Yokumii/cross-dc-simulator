@@ -96,23 +96,26 @@ echo "Congestion control: $CC"
 echo "Load balancing: $LB"
 echo "Flow scale factor: $FLOW_SCALE"
 
-# create log directory
+ROOT_DIR="$(cd "$(dirname "$0")"/.. && pwd)"
+SIM_DIR="${ROOT_DIR}/simulation"
+RESULTS_ROOT="${ROOT_DIR}/results"
+SCRIPT_TAG="run_cross_dc_batch"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_DIR="simulation_logs_${TIMESTAMP}"
-mkdir -p $LOG_DIR
+RUN_DIR="${RESULTS_ROOT}/${SCRIPT_TAG}_${TIMESTAMP}"
+mkdir -p "${RUN_DIR}"
 
 # define file paths
 TOPO="cross_dc_k${K_FAT}_dc${NUM_DC}_os2"
-TOPO_FILE="config/${TOPO}.txt"
-INTRA_FLOW_FILE="config/${TOPO}_intra_only_flow.txt"
-MIXED_FLOW_FILE="config/${TOPO}_mixed_flow.txt"
+TOPO_FILE="${SIM_DIR}/config/${TOPO}.txt"
+INTRA_FLOW_FILE="${SIM_DIR}/config/${TOPO}_intra_only_flow.txt"
+MIXED_FLOW_FILE="${SIM_DIR}/config/${TOPO}_mixed_flow.txt"
 
 # check and generate topology file if needed
 if [ -f "$TOPO_FILE" ]; then
     echo "Topology file $TOPO_FILE already exists, skipping generation."
 else
     echo "Generating topology file $TOPO_FILE..."
-    python3 config/cross_dc_topology_gen.py $K_FAT 2 $NUM_DC $INTRA_BW 0.01 $INTER_BW 4 > $LOG_DIR/topology_gen.log 2>&1
+    (cd "$SIM_DIR" && python3 config/cross_dc_topology_gen.py $K_FAT 2 $NUM_DC $INTRA_BW 0.01 $INTER_BW 4)
     if [ $? -eq 0 ]; then
         echo "Topology file generated successfully."
     else
@@ -132,7 +135,7 @@ if [ -f "$INTRA_FLOW_FILE" ]; then
     echo "Intra-only traffic file $INTRA_FLOW_FILE already exists, skipping generation."
 else
     echo "Generating intra-only traffic file $INTRA_FLOW_FILE..."
-    python3 traffic_gen/intra_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --intra-bw $INTRA_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o $INTRA_FLOW_FILE --flow-scale $FLOW_SCALE > $LOG_DIR/intra_traffic_gen.log 2>&1
+    (cd "$SIM_DIR" && python3 traffic_gen/intra_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --intra-bw $INTRA_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o "$INTRA_FLOW_FILE" --flow-scale $FLOW_SCALE)
     if [ $? -eq 0 ]; then
         echo "Intra-only traffic file generated successfully."
     else
@@ -146,7 +149,7 @@ if [ -f "$MIXED_FLOW_FILE" ]; then
     echo "Mixed traffic file $MIXED_FLOW_FILE already exists, skipping generation."
 else
     echo "Generating mixed traffic file $MIXED_FLOW_FILE..."
-    python3 traffic_gen/cross_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --inter-load $INTER_LOAD --intra-bw $INTRA_BW --inter-bw $INTER_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o $MIXED_FLOW_FILE --flow-scale $FLOW_SCALE > $LOG_DIR/mixed_traffic_gen.log 2>&1
+    (cd "$SIM_DIR" && python3 traffic_gen/cross_dc_traffic_gen.py -k $K_FAT -d $NUM_DC --intra-load $INTRA_LOAD --inter-load $INTER_LOAD --intra-bw $INTRA_BW --inter-bw $INTER_BW -t $SIMUL_TIME -c traffic_gen/AliStorage2019.txt -o "$MIXED_FLOW_FILE" --flow-scale $FLOW_SCALE)
     if [ $? -eq 0 ]; then
         echo "Mixed traffic file generated successfully."
     else
@@ -164,9 +167,12 @@ fi
 echo "All required files are ready. Starting simulations..."
 sleep 1
 
+# 记录运行前已有的输出ID
+pre_ids=$(ls -1 "${SIM_DIR}/mix/output" 2>/dev/null || true)
+
 # start intra-only simulation
 echo "Starting intra-only simulation..."
-screen -dmS intra_only bash -c "cd $(pwd) && python3 run_cross_dc.py \
+screen -dmS intra_only bash -c "cd ${SIM_DIR} && python3 run_cross_dc.py \
     --traffic-type intra_only \
     --k-fat $K_FAT \
     --num-dc $NUM_DC \
@@ -179,11 +185,11 @@ screen -dmS intra_only bash -c "cd $(pwd) && python3 run_cross_dc.py \
     --cc $CC \
     --lb $LB \
     --flow-scale $FLOW_SCALE \
-    2>&1 | tee $LOG_DIR/intra_only.log"
+    2>&1 | cat"
 
 # start mixed simulation
 echo "Starting mixed simulation..."
-screen -dmS mixed bash -c "cd $(pwd) && python3 run_cross_dc.py \
+screen -dmS mixed bash -c "cd ${SIM_DIR} && python3 run_cross_dc.py \
     --traffic-type mixed \
     --k-fat $K_FAT \
     --num-dc $NUM_DC \
@@ -197,7 +203,7 @@ screen -dmS mixed bash -c "cd $(pwd) && python3 run_cross_dc.py \
     --cc $CC \
     --lb $LB \
     --flow-scale $FLOW_SCALE \
-    2>&1 | tee $LOG_DIR/mixed.log"
+    2>&1 | cat"
 
 echo "Simulations started in background screen sessions."
 echo "To attach to the sessions, use:"
@@ -231,4 +237,17 @@ Parameters:
 - Flow scale factor: $FLOW_SCALE
 EOF
 
-echo "Summary information saved to $LOG_DIR/simulation_summary.txt"
+echo "Summary information saved to $RUN_DIR/simulation_summary.txt"
+
+# 移动新增的输出ID到 RUN_DIR
+post_ids=$(ls -1 "${SIM_DIR}/mix/output" 2>/dev/null || true)
+for id in ${post_ids}; do
+  if ! echo "${pre_ids}" | grep -qx "${id}"; then
+    if [ -d "${SIM_DIR}/mix/output/${id}" ]; then
+      mkdir -p "${RUN_DIR}/outputs"
+      mv "${SIM_DIR}/mix/output/${id}" "${RUN_DIR}/outputs/" 2>/dev/null || cp -r "${SIM_DIR}/mix/output/${id}" "${RUN_DIR}/outputs/"
+    fi
+  fi
+done
+
+echo "Outputs saved to: ${RUN_DIR}"
