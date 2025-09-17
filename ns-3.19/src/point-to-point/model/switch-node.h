@@ -81,6 +81,9 @@ class SwitchNode : public Node {
     void AddHeader(Ptr<Packet> p, uint16_t protocolNumber);
     uint16_t EtherToPpp(uint16_t proto);
     bool IsCrossDcFlow(uint32_t sip, uint32_t dip);
+
+    // Trace: drop at switch admission (1=ingress, 2=egress)
+    TracedCallback<Ptr<const Packet>, uint32_t /*type*/, uint32_t /*devIndex*/> m_traceSwDrop;
 };
 
 } /* namespace ns3 */

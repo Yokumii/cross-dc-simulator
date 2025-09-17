@@ -42,7 +42,9 @@ TypeId SwitchNode::GetTypeId(void) {
                           MakeUintegerChecker<uint32_t>())
             .AddAttribute("IsDCISwitch", "Is this switch a DCI switch", BooleanValue(false),
                           MakeBooleanAccessor(&SwitchNode::m_isDCISwitch),
-                          MakeBooleanChecker());
+                          MakeBooleanChecker())
+            .AddTraceSource("SwDrop", "Drop at switch admission (1=ingress,2=egress)",
+                            MakeTraceSourceAccessor(&SwitchNode::m_traceSwDrop));
     return tid;
 }
 
@@ -401,6 +403,7 @@ void SwitchNode::DoSwitchSend(Ptr<Packet> p, CustomHeader &ch, uint32_t outDev, 
                 //           << ",At " << Simulator::Now() << std::endl;
 #endif
                 Settings::dropped_pkt_sw_ingress++;
+                m_traceSwDrop(p, 1, inDev);
                 return;  // drop
             }
         } else { /** DROP: At Egress */
@@ -411,6 +414,7 @@ void SwitchNode::DoSwitchSend(Ptr<Packet> p, CustomHeader &ch, uint32_t outDev, 
             //           << Simulator::Now() << std::endl;
 #endif
             Settings::dropped_pkt_sw_egress++;
+            m_traceSwDrop(p, 2, outDev);
             return;  // drop
         }
 

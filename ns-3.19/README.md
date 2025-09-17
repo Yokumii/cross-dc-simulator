@@ -180,6 +180,22 @@ As well as above figures, other results are located at `./mix/output`, such as u
   * Congestion Notification Packet (`XXX_out_cnp.txt`).
   * CDF of number of queues usage per egress port (`XXX_out_voq_per_dst_cdf.txt`). - Figure 15 
   * CDF of total queue memory overhead per switch (`XXX_out_voq_cdf.txt`). - Figure 16
+  * Packet drops (`XXX_out_drop.txt`).
+
+  The packet drop log (`XXX_out_drop.txt`) uses unified, flow-locatable records with the following format:
+
+  ```
+  time_ns type node if srcId dstId sport dport
+  ```
+
+  - `type`: 0 = link (PHY RX, ErrorModel) drop; 1 = switch ingress admission drop; 2 = switch egress admission drop
+  - `node`: the node where the drop occurs (receiver host/switch for type 0; switch for type 1/2)
+  - `if`: interface index
+    - type 0: the receiving `QbbNetDevice` interface index
+    - type 1: ingress device index (`inDev`)
+    - type 2: egress device index (`outDev`)
+  - `srcId` / `dstId`: node IDs converted from packet IPs (via `Settings::ip_to_node_id`)
+  - `sport` / `dport`: transport ports (TCP/UDP/ACK)
   
 * Each run of simulation creates a repository in `./mix/output` with simulation ID (10-digit number).
 * Inside the folder, you can check the simulation config `config.txt` and output log `config.log`. 
@@ -218,42 +234,3 @@ Most implementations of network load balancing are located in the directory `./s
 As disussed in the paper, we observe that RNIC reacts to even a single out-of-order packet sensitively by sending CNP packet.
 However, existing RDMA-NS3 simulator (HPCC, DCQCN, TLT-RDMA, etc) did not account for this.
 In this simulator, we implemented that behavior in `rdma-hw.cc`.
-
-
-## Citation
-If you find this repository useful in your research, please consider citing:
-```
-@inproceedings{song2023conweave,
-  title={Network Load Balancing with In-network Reordering Support for RDMA},
-  author={Song, Cha Hwan and Khooi, Xin Zhe and Joshi, Raj and Choi, Inho and Li, Jialin and Chan, Mun Choon},
-  booktitle={Proceedings of SIGCOMM},
-  year={2023}
-}
-```
-
-## Credit
-This code repository is based on [https://github.com/alibaba-edu/High-Precision-Congestion-Control](https://github.com/alibaba-edu/High-Precision-Congestion-Control) for Mellanox Connect-X based RDMA-enabled NIC implementation, and [https://github.com/kaist-ina/ns3-tlt-rdma-public.git](https://github.com/kaist-ina/ns3-tlt-rdma-public.git) for Broadcom switch's shared buffer model and IRN implementation.
-
-```
-MIT License
-
-Copyright (c) 2023 National University of Singapore
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```

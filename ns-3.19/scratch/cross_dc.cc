@@ -114,6 +114,7 @@ std::string voq_mon_detail_file = "voq_detail.txt";
 std::string uplink_mon_file = "uplink.txt";
 std::string conn_mon_file = "conn.txt";
 std::string est_error_output_file = "est_error.txt";
+std::string drop_mon_file = "drop.txt";
 
 // CC params
 double alpha_resume_interval = 55, rp_timer = 300, ewma_gain = 1 / 16;
@@ -506,6 +507,59 @@ void get_pfc(FILE *fout, Ptr<QbbNetDevice> dev, uint32_t type) {
     // time, nodeID, nodeType, Interface's Idx, 0:resume, 1:pause
     fprintf(fout, "%lu %u %u %u %u\n", Simulator::Now().GetTimeStep(), dev->GetNode()->GetId(),
             dev->GetNode()->GetNodeType(), dev->GetIfIndex(), type);
+}
+
+/**
+ * @brief PHY RX drop logging (ErrorModel-driven packet drops)
+ * Trace source args: Ptr<const Packet>
+ */
+void on_phy_drop(FILE *fout, Ptr<QbbNetDevice> dev, Ptr<const Packet> pkt) {
+    if (!fout) return;
+    // Standardized format: time_ns type node if srcId dstId sport dport
+    uint32_t nodeId = dev ? dev->GetNode()->GetId() : 0;
+    uint32_t ifIndex = dev ? dev->GetIfIndex() : 0;
+    uint32_t srcId = 0, dstId = 0; uint16_t sport = 0, dport = 0;
+    if (pkt) {
+        CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+        Ptr<Packet> p = pkt->Copy();
+        p->PeekHeader(ch);
+        srcId = Settings::ip_to_node_id(Ipv4Address(ch.sip));
+        dstId = Settings::ip_to_node_id(Ipv4Address(ch.dip));
+        if (ch.l3Prot == 0x6) { sport = ch.tcp.sport; dport = ch.tcp.dport; }
+        else if (ch.l3Prot == 0x11) { sport = ch.udp.sport; dport = ch.udp.dport; }
+        else if (ch.l3Prot == 0xFC || ch.l3Prot == 0xFD) { sport = ch.ack.sport; dport = ch.ack.dport; }
+    }
+    fprintf(fout, "%lu %d %u %u %u %u %u %u\n",
+            (unsigned long)Simulator::Now().GetNanoSeconds(),
+            0, nodeId, ifIndex,
+            srcId, dstId, sport, dport);
+    fflush(fout);
+}
+
+/**
+ * @brief Switch admission drop logging (Ingress/Egress buffer admission drop)
+ * type: 1=ingress, 2=egress; devIndex: device index at switch
+ */
+void on_sw_admission_drop(FILE *fout, Ptr<QbbNetDevice> swDev, Ptr<const Packet> pkt, uint32_t type, uint32_t devIndex) {
+    if (!fout) return;
+    uint32_t nodeId = swDev ? swDev->GetNode()->GetId() : 0;
+    uint32_t ifIndex = devIndex;
+    // Standardized format: time_ns type node if srcId dstId sport dport
+    CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+    if (pkt) {
+        Ptr<Packet> p = pkt->Copy();
+        p->PeekHeader(ch);
+    }
+    uint32_t srcId = Settings::ip_to_node_id(Ipv4Address(ch.sip));
+    uint32_t dstId = Settings::ip_to_node_id(Ipv4Address(ch.dip));
+    uint16_t sport = 0, dport = 0;
+    if (ch.l3Prot == 0x6) { sport = ch.tcp.sport; dport = ch.tcp.dport; }
+    else if (ch.l3Prot == 0x11) { sport = ch.udp.sport; dport = ch.udp.dport; }
+    fprintf(fout, "%lu %d %u %u %u %u %u %u\n",
+            (unsigned long)Simulator::Now().GetNanoSeconds(),
+            (int)type, nodeId, ifIndex,
+            srcId, dstId, sport, dport);
+    fflush(fout);
 }
 
 /*******************************************************************/
@@ -997,6 +1051,9 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("PFC_OUTPUT_FILE") == 0) {
                 conf >> pfc_output_file;
                 std::cerr << "PFC_OUTPUT_FILE\t\t\t\t" << pfc_output_file << '\n';
+        } else if (key.compare("DROP_MON_FILE") == 0) {
+            conf >> drop_mon_file;
+            std::cerr << "DROP_MON_FILE\t\t\t\t" << drop_mon_file << '\n';
             } else if (key.compare("LINK_DOWN") == 0) {
                 conf >> link_down_time >> link_down_A >> link_down_B;
                 std::cerr << "LINK_DOWN\t\t\t\t" << link_down_time << ' ' << link_down_A << ' '
@@ -1218,6 +1275,7 @@ int main(int argc, char *argv[]) {
     rem->SetAttribute("ErrorUnit", StringValue("ERROR_UNIT_PACKET"));
 
     pfc_file = fopen(pfc_output_file.c_str(), "w");
+    FILE* drop_output = fopen(drop_mon_file.c_str(), "w");
 
     QbbHelper qbb;
     Ipv4AddressHelper ipv4;
@@ -1296,6 +1354,22 @@ int main(int argc, char *argv[]) {
             "QbbPfc", MakeBoundCallback(&get_pfc, pfc_file, DynamicCast<QbbNetDevice>(d.Get(0))));
         DynamicCast<QbbNetDevice>(d.Get(1))->TraceConnectWithoutContext(
             "QbbPfc", MakeBoundCallback(&get_pfc, pfc_file, DynamicCast<QbbNetDevice>(d.Get(1))));
+
+        // setup DROP trace: connect PHY RX drop trace with bound file handle
+        DynamicCast<QbbNetDevice>(d.Get(0))->TraceConnectWithoutContext(
+            "PhyRxDrop", MakeBoundCallback(&on_phy_drop, drop_output, DynamicCast<QbbNetDevice>(d.Get(0))));
+        DynamicCast<QbbNetDevice>(d.Get(1))->TraceConnectWithoutContext(
+            "PhyRxDrop", MakeBoundCallback(&on_phy_drop, drop_output, DynamicCast<QbbNetDevice>(d.Get(1))));
+
+        // setup switch admission drop trace (requires SwitchNode SwDrop trace)
+        if (snode->GetNodeType() > 0) {
+            Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(snode);
+            if (sw) {
+                // bind switch device0 as context to get node id; devIndex will be provided by trace
+                sw->TraceConnectWithoutContext(
+                    "SwDrop", MakeBoundCallback(&on_sw_admission_drop, drop_output, DynamicCast<QbbNetDevice>(d.Get(0))));
+            }
+        }
     }
 
     std::cout << "(AVG) NIC RATE: " << get_nic_rate(n) << std::endl;
