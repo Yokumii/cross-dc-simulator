@@ -199,7 +199,7 @@ def main():
     topo_file = f"config/{topo}.txt"
     
     if not os.path.exists(topo_file):
-        os.system(f"python3 config/cross_dc_topology_gen.py {args.k_fat} 2 {args.num_dc} {args.intra_bw} 0.01 {args.inter_bw} 4")
+        os.system(f"python3 ../tools/topology_gen/cross_dc_topology_gen.py {args.k_fat} 2 {args.num_dc} {args.intra_bw} 0.01 {args.inter_bw} 4")
         print(f"Topology file generated: {topo_file}")
     else:
         print(f"Using existing topology file: {topo_file}")
