@@ -205,7 +205,7 @@ def main():
 
     # generate topology file
     print("Generating topology...")
-    # Generate detailed topology filename with parameters
+    # Generate detailed topology filename with parameters (used for BDP mapping key as well)
     topo_detailed = f"cross_dc_k{args.k_fat}_dc{args.num_dc}_os2_ib{args.intra_bw}_il{args.intra_latency}_eb{args.inter_bw}_el{args.inter_latency}_ie{args.intra_error}_ee{args.inter_error}"
     topo_file = f"config/{topo_detailed}.txt"
     
@@ -215,8 +215,10 @@ def main():
     else:
         print(f"Using existing topology file: {topo_file}")
     
-    # Extract simple topology name for BDP lookup
-    topo = f"cross_dc_k{args.k_fat}_dc{args.num_dc}_os2"
+    # Use detailed topology name as BDP key (parameters affect BDP)
+    topo = topo_detailed
+    # Simple topology name (for traffic/trace filenames)
+    topo_simple = f"cross_dc_k{args.k_fat}_dc{args.num_dc}_os2"
 
     # get DCI switch IDs from topology file
     dci_switch_ids = []
@@ -254,9 +256,9 @@ def main():
 
     # generate traffic file
     print("Generating traffic...")
-    # generate different file names for different traffic types
+    # generate different file names for different traffic types (simple topo name; no link params)
     flow_suffix = "mixed" if args.traffic_type == "mixed" else "intra_only"
-    flow_file = f"{topo}_{flow_suffix}_flow.txt"
+    flow_file = f"{topo_simple}_{flow_suffix}_flow.txt"
     flow_path = f"config/{flow_file}"
     
     if not os.path.exists(flow_path):
@@ -322,13 +324,13 @@ def main():
             time=args.simul_time,
         ))
 
-    # BDP calculation
-    if get_bdp(topo) == None:
-        print("ERROR - topology is not registered in run.py!!")
+    # Lookup BDP via shared topo2bdp utility using detailed name; no Python-side computation
+    bdp_val = get_bdp(topo)
+    if bdp_val is None:
+        print(f"ERROR - BDP not found for topology: {topo}. Please add it to tools/topo2bdp/topo_bdp.txt")
         return
-    else:
-        bdp = int(get_bdp(topo))
-        print("1BDP = {}".format(bdp))
+    bdp = int(bdp_val)
+    print("1BDP = {}".format(bdp))
 
     # DCQCN parameters
     kmax_map = "6 %d %d %d %d %d %d %d %d %d %d %d %d" % (
