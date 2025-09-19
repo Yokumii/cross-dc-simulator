@@ -12,6 +12,10 @@ from datetime import datetime
 import sys
 import os
 import argparse
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools', 'topo2bdp'))
+from topo_bdp import get_bdp
 from datetime import date
 
 # randomID
@@ -112,9 +116,7 @@ lb_modes = {
     "conweave": 9,
 }
 
-topo2bdp = {
-    "cross_dc_k4_dc2_os2": 1028250,  # cross-dc -> 100G internal, 400G DCI
-}
+# Legacy topology mapping moved to topo_bdp.py
 
 FLOWGEN_DEFAULT_TIME = 2.0  # see /traffic_gen/traffic_gen.py::base_t
 
@@ -163,8 +165,16 @@ def main():
                       type=int, default=100, help="Intra-datacenter bandwidth (Gbps) (default: 100)")
     parser.add_argument('--inter-bw', dest='inter_bw', action='store',
                       type=int, default=400, help="Inter-datacenter bandwidth (Gbps) (default: 400)")
+    parser.add_argument('--intra-error', dest='intra_error', action='store',
+                      type=float, default=0.0, help="Intra-datacenter link error rate (default: 0.0)")
+    parser.add_argument('--inter-error', dest='inter_error', action='store',
+                      type=float, default=0.0, help="Inter-datacenter link error rate (default: 0.0)")
     parser.add_argument('--flow-scale', dest='flow_scale', action='store',
                       type=float, default=1.0, help="Flow scale factor (larger values = fewer flows) (default: 1.0)")
+    parser.add_argument('--intra-latency', dest='intra_latency', action='store',
+                      type=float, default=1000, help="Intra-datacenter link latency (ns) (default: 1000 - 1us)")
+    parser.add_argument('--inter-latency', dest='inter_latency', action='store',
+                      type=float, default=400000, help="Inter-datacenter link latency (ns) (default: 400000 - 400us)")
 
     args = parser.parse_args()
 
@@ -195,14 +205,18 @@ def main():
 
     # generate topology file
     print("Generating topology...")
-    topo = f"cross_dc_k{args.k_fat}_dc{args.num_dc}_os2"
-    topo_file = f"config/{topo}.txt"
+    # Generate detailed topology filename with parameters
+    topo_detailed = f"cross_dc_k{args.k_fat}_dc{args.num_dc}_os2_ib{args.intra_bw}_il{args.intra_latency}_eb{args.inter_bw}_el{args.inter_latency}_ie{args.intra_error}_ee{args.inter_error}"
+    topo_file = f"config/{topo_detailed}.txt"
     
     if not os.path.exists(topo_file):
-        os.system(f"python3 ../tools/topology_gen/cross_dc_topology_gen.py {args.k_fat} 2 {args.num_dc} {args.intra_bw} 0.01 {args.inter_bw} 4")
+        os.system(f"python3 ../tools/topology_gen/cross_dc_topology_gen.py {args.k_fat} 2 {args.num_dc} {args.intra_bw} {args.intra_latency} {args.inter_bw} {args.inter_latency} {args.intra_error} {args.inter_error}")
         print(f"Topology file generated: {topo_file}")
     else:
         print(f"Using existing topology file: {topo_file}")
+    
+    # Extract simple topology name for BDP lookup
+    topo = f"cross_dc_k{args.k_fat}_dc{args.num_dc}_os2"
 
     # get DCI switch IDs from topology file
     dci_switch_ids = []
@@ -309,11 +323,12 @@ def main():
         ))
 
     # BDP calculation
-    if topo2bdp.get(topo) == None:
-        print("ERROR - topology is not registered in run.py!!", flush=True)
+    if get_bdp(topo) == None:
+        print("ERROR - topology is not registered in run.py!!")
         return
-    bdp = int(topo2bdp[topo])
-    print("1BDP = {}".format(bdp))
+    else:
+        bdp = int(get_bdp(topo))
+        print("1BDP = {}".format(bdp))
 
     # DCQCN parameters
     kmax_map = "6 %d %d %d %d %d %d %d %d %d %d %d %d" % (

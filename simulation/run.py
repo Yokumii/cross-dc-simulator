@@ -12,6 +12,10 @@ from datetime import datetime
 import sys
 import os
 import argparse
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools', 'topo2bdp'))
+from topo_bdp import get_bdp
 from datetime import date
 
 # randomID
@@ -109,11 +113,7 @@ lb_modes = {
     "conweave": 9,
 }
 
-topo2bdp = {
-    "leaf_spine_128_100G_OS2": 104000,  # 2-tier -> all 100Gbps
-    "fat_k8_100G_OS2": 156000,  # 3-tier -> all 100Gbps
-    "cross_dc_k4_dc2_os2": 102008250,  # cross-dc -> 100G internal, 400G DCI
-}
+# topo2bdp moved to topo_bdp.py
 
 FLOWGEN_DEFAULT_TIME = 2.0  # see /traffic_gen/traffic_gen.py::base_t
 
@@ -332,10 +332,10 @@ def main():
         ))
 
     # 1 BDP calculation
-    if topo2bdp.get(topo) == None:
+    if get_bdp(topo) == None:
         print("ERROR - topology is not registered in run.py!!", flush=True)
         return
-    bdp = int(topo2bdp[topo])
+    bdp = int(get_bdp(topo))
     print("1BDP = {}".format(bdp))
 
     # DCQCN parameters (NOTE: HPCC's 400KB/1600KB is too large, although used in Microsoft)

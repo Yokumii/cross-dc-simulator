@@ -10,6 +10,10 @@ import os
 import argparse
 from datetime import date
 import glob
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'tools', 'topo2bdp'))
+from topo_bdp import topo2bdp
 
 
 # LB/CC mode matching

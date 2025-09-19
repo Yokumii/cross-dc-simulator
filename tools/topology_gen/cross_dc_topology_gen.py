@@ -6,10 +6,11 @@ k_fat = 4                   # Fat-tree topology parameter K
 oversubscript = 2           # Over-subscription ratio between ToR uplink and downlink
 num_datacenters = 2         # Number of datacenters
 intra_dc_link_rate = 100    # Intra-datacenter link bandwidth (Gbps)
-intra_dc_link_latency = 0.01  # Intra-datacenter link latency (ms)
+intra_dc_link_latency = 1000     # Intra-datacenter link latency (ns) - 1us
 inter_dc_link_rate = 400    # Inter-datacenter link bandwidth (Gbps)
-inter_dc_link_latency = 4   # Inter-datacenter link latency (ms)
-link_error_rate = 0.0       # Link error rate
+inter_dc_link_latency = 400000   # Inter-datacenter link latency (ns) - 400us
+intra_dc_link_error_rate = 0.0  # Intra-datacenter link error rate
+inter_dc_link_error_rate = 0.0  # Inter-datacenter link error rate
 
 import sys
 
@@ -28,6 +29,10 @@ if len(sys.argv) > 6:
     inter_dc_link_rate = int(sys.argv[6])
 if len(sys.argv) > 7:
     inter_dc_link_latency = float(sys.argv[7])
+if len(sys.argv) > 8:
+    intra_dc_link_error_rate = float(sys.argv[8])
+if len(sys.argv) > 9:
+    inter_dc_link_error_rate = float(sys.argv[9])
 
 # Validate parameters
 assert(k_fat % 2 == 0), "K must be an even number"
@@ -38,9 +43,11 @@ print(f"Fat-tree K: {k_fat}")
 print(f"Over-subscription ratio: {oversubscript}")
 print(f"Number of datacenters: {num_datacenters}")
 print(f"Intra-datacenter link bandwidth: {intra_dc_link_rate}Gbps")
-print(f"Intra-datacenter link latency: {intra_dc_link_latency}ms")
+print(f"Intra-datacenter link latency: {intra_dc_link_latency}ns")
+print(f"Intra-datacenter link error rate: {intra_dc_link_error_rate}")
 print(f"Inter-datacenter link bandwidth: {inter_dc_link_rate}Gbps")
-print(f"Inter-datacenter link latency: {inter_dc_link_latency}ms")
+print(f"Inter-datacenter link latency: {inter_dc_link_latency}ns")
+print(f"Inter-datacenter link error rate: {inter_dc_link_error_rate}")
 
 # Calculate node counts for a single datacenter
 n_core = int(k_fat / 2 * k_fat / 2)
@@ -86,7 +93,21 @@ print(f"Total number of switches: {n_switch_total}")
 print(f"Total number of nodes: {n_node_total}")
 
 # Generate topology file
-filename = f"config/cross_dc_k{k_fat}_dc{num_datacenters}_os{oversubscript}.txt"
+# Create filename with all parameters
+filename_parts = [
+    f"cross_dc_k{k_fat}_dc{num_datacenters}_os{oversubscript}",
+    f"ib{intra_dc_link_rate}",
+    f"il{intra_dc_link_latency}",
+    f"eb{inter_dc_link_rate}",
+    f"el{inter_dc_link_latency}"
+]
+
+# Add error rates if they are greater than 0
+if intra_dc_link_error_rate > 0 or inter_dc_link_error_rate > 0:
+    filename_parts.append(f"ie{intra_dc_link_error_rate}")
+    filename_parts.append(f"ee{inter_dc_link_error_rate}")
+
+filename = f"config/{'_'.join(filename_parts)}.txt"
 num_links = 0
 
 with open(filename, "w") as f:
@@ -99,7 +120,7 @@ with open(filename, "w") as f:
             for i in range(n_server_per_tor):
                 id_server = dc_offset + p * n_server_per_tor + i
                 id_tor = dc_offset + n_server_per_dc + p
-                f.write(f"{id_server} {id_tor} {intra_dc_link_rate}Gbps {int(intra_dc_link_latency*1000000)}ns {link_error_rate}\n")
+                f.write(f"{id_server} {id_tor} {intra_dc_link_rate}Gbps {int(intra_dc_link_latency)}ns {intra_dc_link_error_rate}\n")
                 num_links += 1
         
         # ToR to aggregation layer links
@@ -108,7 +129,7 @@ with open(filename, "w") as f:
                 for l in range(n_agg_per_pod):
                     id_tor = dc_offset + n_server_per_dc + i * n_tor_per_pod + j
                     id_agg = dc_offset + n_server_per_dc + n_tor_per_dc + i * n_agg_per_pod + l
-                    f.write(f"{id_tor} {id_agg} {intra_dc_link_rate}Gbps {int(intra_dc_link_latency*1000000)}ns {link_error_rate}\n")
+                    f.write(f"{id_tor} {id_agg} {intra_dc_link_rate}Gbps {int(intra_dc_link_latency)}ns {intra_dc_link_error_rate}\n")
                     num_links += 1
         
         # Aggregation layer to core layer links
@@ -118,14 +139,14 @@ with open(filename, "w") as f:
                 for l in range(int(k_fat / 2)):
                     id_agg = dc_offset + n_server_per_dc + n_tor_per_dc + i * n_agg_per_pod + j
                     id_core = dc_offset + n_server_per_dc + n_tor_per_dc + n_agg_per_dc + j * n_jump + l
-                    f.write(f"{id_agg} {id_core} {intra_dc_link_rate}Gbps {int(intra_dc_link_latency*1000000)}ns {link_error_rate}\n")
+                    f.write(f"{id_agg} {id_core} {intra_dc_link_rate}Gbps {int(intra_dc_link_latency)}ns {intra_dc_link_error_rate}\n")
                     num_links += 1
         
         # Core layer to DCI switch links
         id_dci = dc_offset + n_server_per_dc + n_tor_per_dc + n_agg_per_dc + n_core_per_dc
         for i in range(n_core_per_dc):
             id_core = dc_offset + n_server_per_dc + n_tor_per_dc + n_agg_per_dc + i
-            f.write(f"{id_core} {id_dci} {intra_dc_link_rate}Gbps {int(intra_dc_link_latency*1000000)}ns {link_error_rate}\n")
+            f.write(f"{id_core} {id_dci} {intra_dc_link_rate}Gbps {int(intra_dc_link_latency)}ns {intra_dc_link_error_rate}\n")
             num_links += 1
     
     # DCI switch interconnections (full mesh)
@@ -133,7 +154,7 @@ with open(filename, "w") as f:
         for j in range(i+1, num_datacenters):
             id_dci1 = i * (n_server_per_dc + n_switch_per_dc + n_dci_per_dc) + n_server_per_dc + n_switch_per_dc
             id_dci2 = j * (n_server_per_dc + n_switch_per_dc + n_dci_per_dc) + n_server_per_dc + n_switch_per_dc
-            f.write(f"{id_dci1} {id_dci2} {inter_dc_link_rate}Gbps {int(inter_dc_link_latency*1000000)}ns {link_error_rate}\n")
+            f.write(f"{id_dci1} {id_dci2} {inter_dc_link_rate}Gbps {int(inter_dc_link_latency)}ns {inter_dc_link_error_rate}\n")
             num_links += 1
 
 # Add topology file header information
@@ -163,7 +184,7 @@ line_prepender(filename, f"{n_node_total} {n_switch_total} {num_links}")
 print(f"\nTopology file generated: {filename}")
 print(f"Total number of links: {num_links}")
 
-# Generate server trace file
+# Generate server trace file (use simple filename without parameters)
 trace_filename = f"config/cross_dc_k{k_fat}_dc{num_datacenters}_trace.txt"
 with open(trace_filename, "w") as f:
     f.write(f"{n_server_total}\n")

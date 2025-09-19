@@ -16,6 +16,10 @@ INTRA_LOAD=0.5
 INTER_LOAD=0.2
 INTRA_BW=100
 INTER_BW=400
+INTRA_ERROR=0.0
+INTER_ERROR=0.0
+INTRA_LATENCY=1000
+INTER_LATENCY=400000
 BUFFER=16
 DCI_BUFFER=128
 CC="dcqcn"
@@ -54,6 +58,22 @@ while [[ $# -gt 0 ]]; do
             INTER_BW="$2"
             shift 2
             ;;
+        --intra-error)
+            INTRA_ERROR="$2"
+            shift 2
+            ;;
+        --inter-error)
+            INTER_ERROR="$2"
+            shift 2
+            ;;
+        --intra-latency)
+            INTRA_LATENCY="$2"
+            shift 2
+            ;;
+        --inter-latency)
+            INTER_LATENCY="$2"
+            shift 2
+            ;;
         --buffer)
             BUFFER="$2"
             shift 2
@@ -90,6 +110,10 @@ echo "Intra-datacenter load: $INTRA_LOAD"
 echo "Inter-datacenter load: $INTER_LOAD"
 echo "Intra-datacenter bandwidth: $INTRA_BW Gbps"
 echo "Inter-datacenter bandwidth: $INTER_BW Gbps"
+echo "Intra-datacenter error rate: $INTRA_ERROR"
+echo "Inter-datacenter error rate: $INTER_ERROR"
+echo "Intra-datacenter latency: $INTRA_LATENCY ns"
+echo "Inter-datacenter latency: $INTER_LATENCY ns"
 echo "Buffer size: $BUFFER MB"
 echo "DCI buffer size: $DCI_BUFFER MB"
 echo "Congestion control: $CC"
@@ -105,7 +129,22 @@ RUN_DIR="${RESULTS_ROOT}/${SCRIPT_TAG}_${TIMESTAMP}"
 mkdir -p "${RUN_DIR}"
 
 # define file paths
-TOPO="cross_dc_k${K_FAT}_dc${NUM_DC}_os2"
+# Create topology filename with all parameters
+TOPO_PARTS=(
+    "cross_dc_k${K_FAT}_dc${NUM_DC}_os2"
+    "ib${INTRA_BW}"
+    "il${INTRA_LATENCY}"  # intra latency
+    "eb${INTER_BW}"
+    "el${INTER_LATENCY}"  # inter latency
+)
+
+# Add error rates if they are greater than 0
+if (( $(echo "$INTRA_ERROR > 0" | bc -l) )) || (( $(echo "$INTER_ERROR > 0" | bc -l) )); then
+    TOPO_PARTS+=("ie${INTRA_ERROR}")
+    TOPO_PARTS+=("ee${INTER_ERROR}")
+fi
+
+TOPO=$(IFS="_"; echo "${TOPO_PARTS[*]}")
 TOPO_FILE="${SIM_DIR}/config/${TOPO}.txt"
 INTRA_FLOW_FILE="${SIM_DIR}/config/${TOPO}_intra_only_flow.txt"
 MIXED_FLOW_FILE="${SIM_DIR}/config/${TOPO}_mixed_flow.txt"
@@ -115,7 +154,7 @@ if [ -f "$TOPO_FILE" ]; then
     echo "Topology file $TOPO_FILE already exists, skipping generation."
 else
     echo "Generating topology file $TOPO_FILE..."
-        (cd "$SIM_DIR" && python3 ../tools/topology_gen/cross_dc_topology_gen.py $K_FAT 2 $NUM_DC $INTRA_BW 0.01 $INTER_BW 4)
+        (cd "$SIM_DIR" && python3 ../tools/topology_gen/cross_dc_topology_gen.py $K_FAT 2 $NUM_DC $INTRA_BW $INTRA_LATENCY $INTER_BW $INTER_LATENCY $INTRA_ERROR $INTER_ERROR)
     if [ $? -eq 0 ]; then
         echo "Topology file generated successfully."
     else
@@ -230,6 +269,8 @@ Parameters:
 - Inter-datacenter load: $INTER_LOAD
 - Intra-datacenter bandwidth: $INTRA_BW Gbps
 - Inter-datacenter bandwidth: $INTER_BW Gbps
+- Intra-datacenter latency: $INTRA_LATENCY ns
+- Inter-datacenter latency: $INTER_LATENCY ns
 - Buffer size: $BUFFER MB
 - DCI buffer size: $DCI_BUFFER MB
 - Congestion control: $CC

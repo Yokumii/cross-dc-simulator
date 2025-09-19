@@ -8,6 +8,14 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.ticker as tick
 import math
+import os
+import sys
+# make parent directory importable when running as a script
+_CUR_DIR = os.path.dirname(os.path.realpath(__file__))
+_TOPO2BDP_DIR = os.path.abspath(os.path.join(_CUR_DIR, "..", "..", "tools", "topo2bdp"))
+if _TOPO2BDP_DIR not in sys.path:
+    sys.path.insert(0, _TOPO2BDP_DIR)
+from topo_bdp import topo2bdp
 from cycler import cycler
 
 

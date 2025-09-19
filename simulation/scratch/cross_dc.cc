@@ -47,6 +47,7 @@
 #include "ns3/qbb-net-device.h"
 #include "ns3/rdma-hw.h"
 #include "ns3/settings.h"
+#include "../../tools/topo2bdp/topo_bdp.h"
 
 using namespace ns3;
 using namespace std;
@@ -1472,24 +1473,9 @@ int main(int argc, char *argv[]) {
      *new rate can be divided by 2 at maximum)
      */
 
-    // manually type BDP
-    std::map<std::string, uint32_t> topo2bdpMap;
-    topo2bdpMap[std::string("leaf_spine_128_100G_OS2")] = 104000;  // RTT=8320
-    topo2bdpMap[std::string("fat_k8_100G_OS2")] = 156000;      // RTT=12480 --> all 100G links
-    topo2bdpMap[std::string("cross_dc_k4_dc2_os2")] = 1028250;  // cross-dc -> 100G internal, 400G DCI
-
-    // topology_file
-    bool found_topo2bdpMap = false;
-    uint32_t irn_bdp_lookup = 0;
-    for (auto pair : topo2bdpMap) {
-        if (topology_file.find(pair.first) !=
-            std::string::npos) {  // if topology file string includes the word
-            irn_bdp_lookup = pair.second;
-            found_topo2bdpMap = true;
-            break;
-        }
-    }
-    if (found_topo2bdpMap == false) {
+    // Use unified BDP mapping from topo_bdp.h
+    uint32_t irn_bdp_lookup = find_bdp_by_path(topology_file);
+    if (irn_bdp_lookup == 0) {
         std::cout << __FILE__ << "(" << __LINE__ << ")"
                   << " ERROR - topo2bdpMap has no matched item with " << topology_file << std::endl;
         assert(false);
@@ -1523,7 +1509,7 @@ int main(int argc, char *argv[]) {
             rdmaHw->SetAttribute("RateBound", BooleanValue(rate_bound));
             rdmaHw->SetAttribute("DctcpRateAI", DataRateValue(DataRate(dctcp_rate_ai)));
             rdmaHw->SetAttribute("IrnEnable", BooleanValue(enable_irn));
-            // topo2bdpMap (e.g., longest BDP 25000: 8us * 25Gbps)
+            // BDP from unified mapping (e.g., longest BDP 25000: 8us * 25Gbps)
             rdmaHw->SetAttribute("IrnRtoHigh", TimeValue(MicroSeconds(320)));  // 1930
             rdmaHw->SetAttribute("IrnRtoLow", TimeValue(MicroSeconds(100)));   // 454
             rdmaHw->SetAttribute("IrnBdp", UintegerValue(irn_bdp_lookup));
