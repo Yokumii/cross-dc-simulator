@@ -15,7 +15,7 @@ _CUR_DIR = os.path.dirname(os.path.realpath(__file__))
 _TOPO2BDP_DIR = os.path.abspath(os.path.join(_CUR_DIR, "..", "..", "tools", "topo2bdp"))
 if _TOPO2BDP_DIR not in sys.path:
     sys.path.insert(0, _TOPO2BDP_DIR)
-from topo_bdp import topo2bdp
+from topo_bdp import get_bdp
 from cycler import cycler
 
 
@@ -33,11 +33,6 @@ lb_modes = {
     3: "conga",
     6: "letflow",
     9: "conweave",
-}
-topo2bdp = {
-    "leaf_spine_128_100G_OS2": 104000,  # 2-tier
-    "fat_k4_100G_OS2": 153000, # 3-tier -> core 400G
-    "cross_dc_k4_dc2_os2": 102008250,  # cross-dc -> 100G internal, 400G DCI
 }
 
 C = [
@@ -192,8 +187,8 @@ def main():
     # test_n = 10
     with open(history_filename, "r") as f:
         for line in f.readlines():
-            for topo in topo2bdp.keys():
-                if topo in line:
+            # Check if line contains any topology name (no need to check specific keys)
+            if "cross_dc_k" in line or "fat_k" in line or "leaf_spine" in line:
                     parsed_line = line.replace("\n", "").split(',')
                     config_id = parsed_line[1]
                     cc_mode = cc_modes[int(parsed_line[2])]
