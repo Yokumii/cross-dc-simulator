@@ -4,4 +4,5 @@ results/*
 .vscode/*
 **/*.pyc
 .vscode
+.cache/*
 __pycache__

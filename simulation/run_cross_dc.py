@@ -72,7 +72,7 @@ RATE_HAI {hai}Mb/s
 MIN_RATE 100Mb/s
 DCTCP_RATE_AI {dctcp_ai}Mb/s
 
-ERROR_RATE_PER_LINK 0.0000
+ERROR_RATE_PER_LINK {error_rate_per_link}
 L2_CHUNK_SIZE 4000
 L2_ACK_INTERVAL 1
 L2_BACK_TO_ZERO 0
@@ -402,7 +402,8 @@ def main():
             cwh_extra_reply_deadline=cwh_extra_reply_deadline,
             cwh_path_pause_time=cwh_path_pause_time,
             cwh_extra_voq_flush_time=cwh_extra_voq_flush_time,
-            cwh_default_voq_waiting_time=cwh_default_voq_waiting_time
+            cwh_default_voq_waiting_time=cwh_default_voq_waiting_time,
+            error_rate_per_link=args.inter_error
         )
     else:
         print("unknown cc:{}".format(args.cc))

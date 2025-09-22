@@ -102,10 +102,9 @@ filename_parts = [
     f"el{inter_dc_link_latency}"
 ]
 
-# Add error rates if they are greater than 0
-if intra_dc_link_error_rate > 0 or inter_dc_link_error_rate > 0:
-    filename_parts.append(f"ie{intra_dc_link_error_rate}")
-    filename_parts.append(f"ee{inter_dc_link_error_rate}")
+# Always add error rates to filename (even if 0)
+filename_parts.append(f"ie{intra_dc_link_error_rate}")
+filename_parts.append(f"ee{inter_dc_link_error_rate}")
 
 filename = f"config/{'_'.join(filename_parts)}.txt"
 num_links = 0
