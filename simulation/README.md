@@ -197,6 +197,16 @@ As well as above figures, other results are located at `./mix/output`, such as u
   - `srcId` / `dstId`: node IDs converted from packet IPs (via `Settings::ip_to_node_id`)
   - `sport` / `dport`: transport ports (TCP/UDP/ACK)
   
+  To analyze packet drops, you can use the drop analysis tool:
+  ```shell
+  python3 ./analysis/drop_analysis_simple.py <drop_file_path> [options]
+  ```
+  
+  The tool provides:
+  - Link type analysis (Intra-DC vs Inter-DC based on srcId/dstId)
+  - Drop location analysis (NIC vs Switch based on type field)
+  - Statistical reports and visualizations
+  
 * Each run of simulation creates a repository in `./mix/output` with simulation ID (10-digit number).
 * Inside the folder, you can check the simulation config `config.txt` and output log `config.log`. 
 * The output files include post-processed files such as CDF results.
