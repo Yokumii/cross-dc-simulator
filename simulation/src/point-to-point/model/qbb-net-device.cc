@@ -622,21 +622,38 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
         return;
     }
 
-    // Add FEC header to packet
+    // Calculate base PSN for this coding block
+    uint32_t basePSN = (m_txSeqNum / m_fecBlockSize) * m_fecBlockSize;
+
+    // If this is the first packet of a new block, save its CustomHeader for repair packets
+    if (m_txSeqNum == basePSN)
+    {
+        // Extract and save CustomHeader from the first packet of the block
+        CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+        packet->PeekHeader(ch);
+        m_currentBlockHeader = ch;
+
+        std::cout << "[FecTransmit] Saved CustomHeader from first packet of block " << basePSN
+                  << " sip=" << m_currentBlockHeader.sip << " dip=" << m_currentBlockHeader.dip
+                  << " sport=" << m_currentBlockHeader.udp.sport << " dport=" << m_currentBlockHeader.udp.dport
+                  << " l3Prot=0x" << std::hex << (uint32_t)m_currentBlockHeader.l3Prot << std::dec << std::endl;
+    }
+
+    // Create a copy of the packet for encoding (do not modify the original packet being transmitted)
+    Ptr<Packet> encodingPacket = packet->Copy();
+
+    // Add FEC header to the copy for encoding purposes
     FecHeader fecHeader;
     fecHeader.SetType(FecHeader::FEC_DATA);
     fecHeader.SetBlockSize(m_fecBlockSize);
     fecHeader.SetInterleavingDepth(m_fecInterleavingDepth);
     fecHeader.SetPSN(m_txSeqNum);
-
-    // Calculate base PSN for this coding block
-    uint32_t basePSN = (m_txSeqNum / m_fecBlockSize) * m_fecBlockSize;
     fecHeader.SetBasePSN(basePSN);
 
-    packet->AddHeader(fecHeader);
+    encodingPacket->AddHeader(fecHeader);
 
-    // Encode packet with FEC encoder
-    m_fecEncoder->EncodePacket(packet, m_txSeqNum);
+    // Encode the copy with FEC encoder (original packet is not modified)
+    m_fecEncoder->EncodePacket(encodingPacket, m_txSeqNum);
     m_fecEncodedPackets++;
 
     NS_LOG_DEBUG("FEC encoded packet PSN=" << m_txSeqNum << " (block " << basePSN << ")");
@@ -647,11 +664,14 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     // Check if coding block is complete
     if (m_fecEncoder->IsBlockComplete())
     {
-        NS_LOG_INFO("Coding block complete at PSN " << m_txSeqNum - 1 << ", generating repair packets");
+        std::cout << "[FecTransmit] Coding block complete at PSN " << m_txSeqNum - 1
+                  << ", generating repair packets" << std::endl;
 
         // Generate repair packets
         std::vector<Ptr<Packet>> repairPackets = m_fecEncoder->GenerateRepairPackets();
         m_fecRepairPackets += repairPackets.size();
+
+        std::cout << "[FecTransmit] Generated " << repairPackets.size() << " repair packets" << std::endl;
 
         // Send repair packets
         SendRepairPackets(repairPackets);
@@ -743,11 +763,45 @@ QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets)
 {
     NS_LOG_FUNCTION(this << repairPackets.size());
 
+    // Debug: log saved header info
+    std::cout << "[SendRepairPackets] Using saved header - sip=" << m_currentBlockHeader.sip
+              << " dip=" << m_currentBlockHeader.dip
+              << " sport=" << m_currentBlockHeader.udp.sport
+              << " dport=" << m_currentBlockHeader.udp.dport
+              << " l3Prot=0x" << std::hex << (uint32_t)m_currentBlockHeader.l3Prot << std::dec << std::endl;
+
     for (size_t i = 0; i < repairPackets.size(); ++i)
     {
         Ptr<Packet> repairPkt = repairPackets[i]->Copy();
 
-        NS_LOG_DEBUG("Sending repair packet " << i << " of " << repairPackets.size());
+        std::cout << "[SendRepairPackets] Repair packet " << i << " size before CustomHeader: "
+                  << repairPkt->GetSize() << std::endl;
+
+        // Create CustomHeader for repair packet using saved header from first data packet
+        // This ensures repair packets have the correct source/destination IP for routing
+        CustomHeader ch = m_currentBlockHeader;  // Copy the saved header
+
+        // Mark this as a repair packet by setting l3Prot to a special value
+        ch.l3Prot = 0xFD;  // Use 0xFD to indicate FEC repair packet (similar to PFC/CNP)
+
+        std::cout << "[SendRepairPackets] Created CustomHeader with l3Prot=0x"
+                  << std::hex << (uint32_t)ch.l3Prot << std::dec << std::endl;
+
+        // Add CustomHeader to repair packet so switches can route it
+        repairPkt->AddHeader(ch);
+
+        std::cout << "[SendRepairPackets] Repair packet " << i << " after adding CustomHeader: size="
+                  << repairPkt->GetSize()
+                  << " sip=" << ch.sip << " dip=" << ch.dip
+                  << " sport=" << ch.udp.sport << " dport=" << ch.udp.dport
+                  << " l3Prot=0x" << std::hex << (uint32_t)ch.l3Prot << std::dec << std::endl;
+
+        // Verify by peeking
+        CustomHeader verify_ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+        repairPkt->PeekHeader(verify_ch);
+        std::cout << "[SendRepairPackets] Verification PeekHeader: sip=" << verify_ch.sip
+                  << " dip=" << verify_ch.dip
+                  << " l3Prot=0x" << std::hex << (uint32_t)verify_ch.l3Prot << std::dec << std::endl;
 
         // Enqueue repair packet for transmission
         // Use high priority queue (index 0) for repair packets to minimize delay
@@ -758,8 +812,6 @@ QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets)
         }
         else  // switch
         {
-            CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
-            repairPkt->PeekHeader(ch);
             SwitchSend(0, repairPkt, ch);
         }
     }

@@ -207,9 +207,10 @@ public:
   
   Ptr<FecEncoder> m_fecEncoder;         ///< FEC encoder for this device
   Ptr<FecDecoder> m_fecDecoder;         ///< FEC decoder for this device
-  
+
   uint32_t m_txSeqNum;                  ///< Transmit sequence number for FEC
-  
+  CustomHeader m_currentBlockHeader;    ///< CustomHeader from first packet of current FEC block
+
   // FEC statistics
   uint32_t m_fecEncodedPackets;         ///< Number of data packets encoded
   uint32_t m_fecRepairPackets;          ///< Number of repair packets generated
