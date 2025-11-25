@@ -380,27 +380,60 @@ void QbbNetDevice::Receive(Ptr<Packet> packet) {
 
     m_macRxTrace(packet);
 
-    // Check for FEC header if FEC enabled (only at receiving endpoints)
-    if (m_fecEnabled && m_node->GetNodeType() == 0)  // Only decode at servers (endpoints)
-    {
-        // Peek to see if this has FEC header
-        FecHeader fecHeader;
-        packet->PeekHeader(fecHeader);
-
-        // Process FEC packet (will handle both DATA and REPAIR types)
-        FecReceive(packet);
-
-        // For REPAIR packets, don't forward to upper layers (already handled in FecReceive)
-        if (fecHeader.GetType() == FecHeader::FEC_REPAIR)
-        {
-            return;
-        }
-        // For DATA packets, continue normal processing after FEC processing
-    }
-
+    // First, peek at CustomHeader to check packet type
     CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
     ch.getInt = 1;  // parse INT header
     packet->PeekHeader(ch);
+
+    // Check for FEC packets if FEC enabled (only at receiving endpoints)
+    if (m_fecEnabled && m_node->GetNodeType() == 0)
+    {
+        if (ch.l3Prot == 0xFD)  // FEC repair packet
+        {
+            // Remove CustomHeader to access FecHeader
+            Ptr<Packet> fecPacket = packet->Copy();
+            CustomHeader tempCh(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+            fecPacket->RemoveHeader(tempCh);
+
+            // Now we can access FecHeader
+            FecHeader fecHeader;
+            fecPacket->PeekHeader(fecHeader);
+
+            // Process FEC repair packet
+            FecReceive(fecPacket);
+
+            // Don't forward repair packets to upper layers
+            return;
+        }
+        else if (ch.l3Prot == 0x11)  // UDP data packet with FEC
+        {
+            // Data packets have structure: [CustomHeader][FecHeader][Payload]
+            // Remove CustomHeader to access FecHeader
+            Ptr<Packet> fecPacket = packet->Copy();
+            CustomHeader tempCh(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+            fecPacket->RemoveHeader(tempCh);
+
+            // Read FecHeader to get PSN
+            FecHeader fecHeader;
+            fecPacket->PeekHeader(fecHeader);
+            uint32_t psn = fecHeader.GetPSN();
+
+            // Store data packet in FEC decoder
+            m_fecDecoder->ReceiveDataPacket(fecPacket, psn);
+
+            // Remove FecHeader from original packet to restore normal structure
+            // Original packet: [CustomHeader][FecHeader][Payload]
+            CustomHeader savedCh(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+            packet->RemoveHeader(savedCh);
+            FecHeader tempFecHeader;
+            packet->RemoveHeader(tempFecHeader);
+            packet->AddHeader(savedCh);
+            // Now packet is: [CustomHeader][Payload] - normal structure
+
+            // Continue with normal processing (fall through to line below)
+        }
+    }
+
     if (ch.l3Prot == 0xFE) {  // PFC
         if (!m_qbbEnabled) return;
         unsigned qIndex = ch.pfc.qIndex;
@@ -622,6 +655,18 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
         return;
     }
 
+    // Check if this is a control packet - only encode UDP data packets (0x11)
+    CustomHeader checkHeader(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+    packet->PeekHeader(checkHeader);
+
+    // Control packets: 0xFC (NACK/ACK), 0xFD (FEC repair), 0xFE (PFC), 0xFF (CNP)
+    // Only encode UDP data packets (0x11)
+    if (checkHeader.l3Prot != 0x11)
+    {
+        // Don't encode control packets, only encode UDP data packets
+        return;
+    }
+
     // Calculate base PSN for this coding block
     uint32_t basePSN = (m_txSeqNum / m_fecBlockSize) * m_fecBlockSize;
 
@@ -639,10 +684,9 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
                   << " l3Prot=0x" << std::hex << (uint32_t)m_currentBlockHeader.l3Prot << std::dec << std::endl;
     }
 
-    // Create a copy of the packet for encoding (do not modify the original packet being transmitted)
-    Ptr<Packet> encodingPacket = packet->Copy();
-
-    // Add FEC header to the copy for encoding purposes
+    // CRITICAL: Add FEC header AFTER CustomHeader in the ORIGINAL packet
+    // This is necessary so the receiver knows the PSN of each data packet
+    // Packet structure becomes: [CustomHeader][FecHeader][Payload]
     FecHeader fecHeader;
     fecHeader.SetType(FecHeader::FEC_DATA);
     fecHeader.SetBlockSize(m_fecBlockSize);
@@ -650,9 +694,21 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     fecHeader.SetPSN(m_txSeqNum);
     fecHeader.SetBasePSN(basePSN);
 
-    encodingPacket->AddHeader(fecHeader);
+    // Remove CustomHeader temporarily
+    CustomHeader savedCh(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+    packet->RemoveHeader(savedCh);
 
-    // Encode the copy with FEC encoder (original packet is not modified)
+    // Add FecHeader
+    packet->AddHeader(fecHeader);
+
+    // Add CustomHeader back
+    packet->AddHeader(savedCh);
+
+    // Now packet has structure: [CustomHeader][FecHeader][Payload]
+    // Create a copy for encoding
+    Ptr<Packet> encodingPacket = packet->Copy();
+
+    // Encode with FEC encoder
     m_fecEncoder->EncodePacket(encodingPacket, m_txSeqNum);
     m_fecEncodedPackets++;
 
