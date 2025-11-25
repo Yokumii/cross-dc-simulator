@@ -55,6 +55,10 @@ LB_MODE {lb_mode}
 ENABLE_PFC {enabled_pfc}
 ENABLE_IRN {enabled_irn}
 
+FEC_ENABLED {fec_enabled}
+FEC_BLOCK_SIZE {fec_block_size}
+FEC_INTERLEAVING_DEPTH {fec_interleaving_depth}
+
 CONWEAVE_TX_EXPIRY_TIME {cwh_tx_expiry_time}
 CONWEAVE_REPLY_TIMEOUT_EXTRA {cwh_extra_reply_deadline}
 CONWEAVE_PATH_PAUSE_TIME {cwh_path_pause_time}
@@ -175,6 +179,12 @@ def main():
                       type=float, default=1000, help="Intra-datacenter link latency (ns) (default: 1000 - 1us)")
     parser.add_argument('--inter-latency', dest='inter_latency', action='store',
                       type=float, default=400000, help="Inter-datacenter link latency (ns) (default: 400000 - 400us)")
+    parser.add_argument('--fec-enabled', dest='fec_enabled', action='store',
+                      type=int, default=1, help="Enable FEC (default: 1)")
+    parser.add_argument('--fec-block-size', dest='fec_block_size', action='store',
+                      type=int, default=64, help="FEC block size r (default: 64)")
+    parser.add_argument('--fec-interleaving-depth', dest='fec_interleaving_depth', action='store',
+                      type=int, default=8, help="FEC interleaving depth c (default: 8)")
 
     args = parser.parse_args()
 
@@ -403,7 +413,10 @@ def main():
             cwh_path_pause_time=cwh_path_pause_time,
             cwh_extra_voq_flush_time=cwh_extra_voq_flush_time,
             cwh_default_voq_waiting_time=cwh_default_voq_waiting_time,
-            error_rate_per_link=args.inter_error
+            error_rate_per_link=args.inter_error,
+            fec_enabled=args.fec_enabled,
+            fec_block_size=args.fec_block_size,
+            fec_interleaving_depth=args.fec_interleaving_depth
         )
     else:
         print("unknown cc:{}".format(args.cc))
