@@ -34,6 +34,8 @@
 #include<map>
 #include <unordered_map>
 #include <ns3/rdma.h>
+#include "fec-encoder.h"
+#include "fec-decoder.h"
 
 namespace ns3 {
 
@@ -191,9 +193,47 @@ public:
      uint16_t total;
   };
 
+
+  // FEC-related members
+
+  // FEC transmission and reception methods
+  void FecTransmit(Ptr<Packet> packet);
+  void FecReceive(Ptr<Packet> packet);
+  void SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets);
+
+  bool m_fecEnabled;                    ///< Whether FEC is enabled
+  uint32_t m_fecBlockSize;              ///< FEC block size (r parameter)
+  uint32_t m_fecInterleavingDepth;      ///< FEC interleaving depth (c parameter)
+  
+  Ptr<FecEncoder> m_fecEncoder;         ///< FEC encoder for this device
+  Ptr<FecDecoder> m_fecDecoder;         ///< FEC decoder for this device
+  
+  uint32_t m_txSeqNum;                  ///< Transmit sequence number for FEC
+  
+  // FEC statistics
+  uint32_t m_fecEncodedPackets;         ///< Number of data packets encoded
+  uint32_t m_fecRepairPackets;          ///< Number of repair packets generated
+  uint32_t m_fecRecoveredPackets;       ///< Number of packets recovered
+  uint32_t m_fecUnrecoverablePackets;   ///< Number of unrecoverable packets
+
   std::vector<ECNAccount> *m_ecn_source;
 
 public:
+
+  // FEC configuration and statistics
+  void EnableFec(bool enable);
+  void SetFecParameters(uint32_t blockSize, uint32_t interleavingDepth);
+  bool IsFecEnabled() const { return m_fecEnabled; }
+  
+  struct FecStatistics {
+    uint32_t encoded;
+    uint32_t repair;
+    uint32_t recovered;
+    uint32_t unrecoverable;
+  };
+  
+  FecStatistics GetFecStatistics() const;
+
 	Ptr<RdmaEgressQueue> m_rdmaEQ;
 	void RdmaEnqueueHighPrioQ(Ptr<Packet> p);
 
