@@ -1,0 +1,350 @@
+/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
+/*
+ * Copyright (c) 2024 NUS
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation;
+ */
+
+#include "fec-decoder.h"
+#include "fec-xor-engine.h"
+#include "ns3/log.h"
+#include <algorithm>
+
+NS_LOG_COMPONENT_DEFINE("FecDecoder");
+
+namespace ns3 {
+
+FecDecoder::FecDecoder(uint32_t blockSize, uint32_t interleavingDepth)
+  : m_blockSize(blockSize),
+    m_interleavingDepth(interleavingDepth),
+    m_recoveredCount(0),
+    m_unrecoverableCount(0)
+{
+  NS_LOG_FUNCTION(blockSize << interleavingDepth);
+
+  if (blockSize > MAX_BLOCK_SIZE)
+    {
+      NS_LOG_ERROR("Block size " << blockSize << " exceeds maximum " << MAX_BLOCK_SIZE);
+    }
+}
+
+FecDecoder::~FecDecoder()
+{
+  NS_LOG_FUNCTION_NOARGS();
+}
+
+void
+FecDecoder::ReceiveDataPacket(Ptr<Packet> packet, uint32_t psn)
+{
+  NS_LOG_FUNCTION(psn);
+
+  if (packet == 0)
+    {
+      NS_LOG_WARN("ReceiveDataPacket called with null packet");
+      return;
+    }
+
+  // Store in reordering buffer
+  m_reorderBuffer[psn] = packet->Copy();
+
+  // Calculate block base PSN
+  uint32_t basePSN = (psn / m_blockSize) * m_blockSize;
+  uint32_t relativePsn = psn - basePSN;
+
+  // Update block state
+  BlockState& state = GetOrCreateBlockState(basePSN);
+
+  if (!state.receivedBits[relativePsn])
+    {
+      state.receivedBits[relativePsn] = true;
+      state.receivedCount++;
+
+      NS_LOG_DEBUG("Received data packet PSN=" << psn << " (block " << basePSN
+                                                << ", " << state.receivedCount << "/"
+                                                << m_blockSize << ")");
+    }
+}
+
+void
+FecDecoder::ReceiveRepairPacket(Ptr<Packet> repairPacket,
+                                uint32_t basePSN,
+                                uint16_t isn,
+                                const std::vector<uint32_t>& recipe)
+{
+  NS_LOG_FUNCTION(basePSN << isn << recipe.size());
+
+  if (repairPacket == 0)
+    {
+      NS_LOG_WARN("ReceiveRepairPacket called with null packet");
+      return;
+    }
+
+  // Store repair packet info
+  RepairPacketInfo info;
+  info.packet = repairPacket->Copy();
+  info.basePSN = basePSN;
+  info.isn = isn;
+  info.recipe = recipe;
+  info.used = false;
+
+  m_repairBuffer.push_back(info);
+
+  NS_LOG_DEBUG("Stored repair packet ISN=" << isn << " for block " << basePSN
+                                            << " with recipe size " << recipe.size());
+
+  // Immediately attempt recovery
+  RecoverLostPackets();
+}
+
+std::vector<Ptr<Packet>>
+FecDecoder::RecoverLostPackets()
+{
+  NS_LOG_FUNCTION_NOARGS();
+
+  std::vector<Ptr<Packet>> recovered;
+
+  // Try to recover using each repair packet
+  for (auto it = m_repairBuffer.begin(); it != m_repairBuffer.end(); ++it)
+    {
+      if (it->used)
+        {
+          continue; // Already used this repair
+        }
+
+      Ptr<Packet> recoveredPacket = AttemptRecoveryWithRepair(*it);
+
+      if (recoveredPacket != 0)
+        {
+          recovered.push_back(recoveredPacket);
+          it->used = true; // Mark as used
+          m_recoveredCount++;
+
+          NS_LOG_INFO("Successfully recovered packet using repair ISN=" << it->isn);
+
+          // Recovery may enable more recoveries, so restart loop
+          // (In practice, we could optimize this with a queue)
+          return recovered; // Return immediately to allow caller to process
+        }
+    }
+
+  if (recovered.empty())
+    {
+      NS_LOG_DEBUG("No packets recovered in this attempt");
+    }
+
+  return recovered;
+}
+
+bool
+FecDecoder::IsBlockComplete(uint32_t basePSN) const
+{
+  auto it = m_blockStates.find(basePSN);
+
+  if (it == m_blockStates.end())
+    {
+      return false;
+    }
+
+  return it->second.receivedCount >= m_blockSize;
+}
+
+Ptr<Packet>
+FecDecoder::GetPacket(uint32_t psn) const
+{
+  auto it = m_reorderBuffer.find(psn);
+
+  if (it != m_reorderBuffer.end())
+    {
+      return it->second;
+    }
+
+  return 0;
+}
+
+void
+FecDecoder::CleanupOldBlocks(uint32_t threshold)
+{
+  NS_LOG_FUNCTION(threshold);
+
+  // Remove packets before threshold
+  for (auto it = m_reorderBuffer.begin(); it != m_reorderBuffer.end(); )
+    {
+      if (it->first < threshold)
+        {
+          it = m_reorderBuffer.erase(it);
+        }
+      else
+        {
+          ++it;
+        }
+    }
+
+  // Remove block states before threshold
+  for (auto it = m_blockStates.begin(); it != m_blockStates.end(); )
+    {
+      if (it->first < threshold)
+        {
+          it = m_blockStates.erase(it);
+        }
+      else
+        {
+          ++it;
+        }
+    }
+
+  // Remove repair packets for old blocks
+  m_repairBuffer.erase(
+    std::remove_if(m_repairBuffer.begin(), m_repairBuffer.end(),
+                   [threshold](const RepairPacketInfo& info) {
+                     return info.basePSN < threshold;
+                   }),
+    m_repairBuffer.end());
+
+  NS_LOG_DEBUG("Cleaned up blocks before PSN " << threshold);
+}
+
+uint32_t
+FecDecoder::GetRecoveredCount() const
+{
+  return m_recoveredCount;
+}
+
+uint32_t
+FecDecoder::GetUnrecoverableCount() const
+{
+  return m_unrecoverableCount;
+}
+
+Ptr<Packet>
+FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
+{
+  NS_LOG_FUNCTION(repairInfo.isn);
+
+  // Check how many packets are missing from recipe
+  uint32_t missingPsn = 0;
+  uint32_t missingCount = CountMissingInRecipe(repairInfo.recipe, missingPsn);
+
+  if (missingCount == 0)
+    {
+      NS_LOG_DEBUG("Repair ISN=" << repairInfo.isn << " - all packets already received");
+      return 0;
+    }
+
+  if (missingCount > 1)
+    {
+      NS_LOG_DEBUG("Repair ISN=" << repairInfo.isn << " - " << missingCount
+                                  << " packets missing (need exactly 1)");
+      return 0;
+    }
+
+  // Exactly one packet missing - we can recover it!
+  NS_LOG_DEBUG("Attempting recovery of PSN=" << missingPsn << " using repair ISN="
+                                              << repairInfo.isn);
+
+  // Collect received packets from recipe
+  std::vector<Ptr<Packet>> receivedPackets;
+
+  for (uint32_t psn : repairInfo.recipe)
+    {
+      if (psn == missingPsn)
+        {
+          receivedPackets.push_back(0); // Placeholder for missing packet
+        }
+      else
+        {
+          Ptr<Packet> pkt = GetPacket(psn);
+          if (pkt == 0)
+            {
+              NS_LOG_ERROR("Recipe claims PSN=" << psn << " received, but not in buffer!");
+              return 0;
+            }
+          receivedPackets.push_back(pkt);
+        }
+    }
+
+  // Find index of missing packet in recipe
+  uint32_t missingIndex = 0;
+  for (size_t i = 0; i < repairInfo.recipe.size(); ++i)
+    {
+      if (repairInfo.recipe[i] == missingPsn)
+        {
+          missingIndex = i;
+          break;
+        }
+    }
+
+  // Recover packet using XOR engine
+  Ptr<Packet> recoveredPacket = FecXorEngine::RecoverPacket(receivedPackets,
+                                                              repairInfo.packet,
+                                                              missingIndex);
+
+  if (recoveredPacket == 0)
+    {
+      NS_LOG_ERROR("XOR recovery failed for PSN=" << missingPsn);
+      return 0;
+    }
+
+  // Store recovered packet in reordering buffer
+  m_reorderBuffer[missingPsn] = recoveredPacket->Copy();
+
+  // Update block state
+  uint32_t basePSN = (missingPsn / m_blockSize) * m_blockSize;
+  uint32_t relativePsn = missingPsn - basePSN;
+
+  BlockState& state = GetOrCreateBlockState(basePSN);
+  state.receivedBits[relativePsn] = true;
+  state.receivedCount++;
+
+  NS_LOG_INFO("Successfully recovered PSN=" << missingPsn << " (block " << basePSN
+                                             << " now " << state.receivedCount << "/"
+                                             << m_blockSize << ")");
+
+  return recoveredPacket;
+}
+
+uint32_t
+FecDecoder::CountMissingInRecipe(const std::vector<uint32_t>& recipe,
+                                 uint32_t& missingPsn) const
+{
+  uint32_t missingCount = 0;
+
+  for (uint32_t psn : recipe)
+    {
+      auto it = m_reorderBuffer.find(psn);
+
+      if (it == m_reorderBuffer.end())
+        {
+          missingCount++;
+          missingPsn = psn;
+        }
+    }
+
+  return missingCount;
+}
+
+FecDecoder::BlockState&
+FecDecoder::GetOrCreateBlockState(uint32_t basePSN)
+{
+  auto it = m_blockStates.find(basePSN);
+
+  if (it != m_blockStates.end())
+    {
+      return it->second;
+    }
+
+  // Create new block state
+  BlockState newState;
+  newState.basePSN = basePSN;
+  newState.receivedBits.reset();
+  newState.receivedCount = 0;
+
+  m_blockStates[basePSN] = newState;
+
+  NS_LOG_DEBUG("Created new block state for bPSN=" << basePSN);
+
+  return m_blockStates[basePSN];
+}
+
+} // namespace ns3
