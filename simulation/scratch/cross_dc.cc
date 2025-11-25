@@ -148,6 +148,11 @@ std::vector<uint32_t> dci_switch_ids;  // dci-switch id
 bool enable_edge_cnp = false;
 uint32_t edge_cnp_interval = 4;
 
+/*------FEC parameters-----*/
+uint32_t fec_enabled = 0;             // 0: disabled, 1: enabled
+uint32_t fec_block_size = 64;         // r: coding block size (number of packets)
+uint32_t fec_interleaving_depth = 8;  // c: interleaving depth (number of layers)
+
 // Added from Here
 double load = 10.0;
 int enable_irn = 0;
@@ -1115,6 +1120,15 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("ENABLE_EDGE_CNP") == 0) {
                 conf >> enable_edge_cnp;
                 std::cerr << "ENABLE_EDGE_CNP\t\t\t\t" << enable_edge_cnp << '\n';
+            } else if (key.compare("FEC_ENABLED") == 0) {
+                conf >> fec_enabled;
+                std::cerr << "FEC_ENABLED\t\t\t\t" << fec_enabled << '\n';
+            } else if (key.compare("FEC_BLOCK_SIZE") == 0) {
+                conf >> fec_block_size;
+                std::cerr << "FEC_BLOCK_SIZE\t\t\t\t" << fec_block_size << '\n';
+            } else if (key.compare("FEC_INTERLEAVING_DEPTH") == 0) {
+                conf >> fec_interleaving_depth;
+                std::cerr << "FEC_INTERLEAVING_DEPTH\t\t\t" << fec_interleaving_depth << '\n';
             } else if (key.compare("EDGE_CNP_INTERVAL") == 0) {
                 conf >> edge_cnp_interval;
                 std::cerr << "EDGE_CNP_INTERVAL\t\t\t\t" << edge_cnp_interval << '\n';
@@ -1437,6 +1451,23 @@ int main(int argc, char *argv[]) {
             NS_LOG_INFO("Node %u : Broadcom switch (%u ports / %gMB MMU)\n" %
                         (i, sw->GetNDevices() - 1, sw->m_mmu->GetMmuBufferBytes() / 1000000.));
         }
+    }
+
+    // Configure FEC on all devices
+    if (fec_enabled) {
+        std::cout << "Enabling FEC with parameters: r=" << fec_block_size
+                  << " c=" << fec_interleaving_depth << std::endl;
+
+        for (uint32_t i = 0; i < node_num; i++) {
+            for (uint32_t j = 0; j < n.Get(i)->GetNDevices(); j++) {
+                Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(n.Get(i)->GetDevice(j));
+                if (dev) {
+                    dev->SetFecParameters(fec_block_size, fec_interleaving_depth);
+                    dev->EnableFec(true);
+                }
+            }
+        }
+        std::cout << "FEC enabled on all devices" << std::endl;
     }
 
     fct_output = fopen(fct_output_file.c_str(), "w");
