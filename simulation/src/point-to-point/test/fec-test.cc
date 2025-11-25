@@ -206,7 +206,7 @@ FecEncoderTest::DoRun(void)
     // Create encoder with LoWAR(8, 4) parameters
     uint32_t blockSize = 8;
     uint32_t interleavingDepth = 4;
-    Ptr<FecEncoder> encoder = CreateObject<FecEncoder>(blockSize, interleavingDepth);
+    Ptr<FecEncoder> encoder = Ptr<FecEncoder>(new FecEncoder(blockSize, interleavingDepth));
 
     NS_TEST_ASSERT_MSG_NE(encoder, 0, "Encoder creation failed");
 
@@ -276,7 +276,7 @@ FecDecoderTest::DoRun(void)
     // Create decoder with LoWAR(8, 4) parameters
     uint32_t blockSize = 8;
     uint32_t interleavingDepth = 4;
-    Ptr<FecDecoder> decoder = CreateObject<FecDecoder>(blockSize, interleavingDepth);
+    Ptr<FecDecoder> decoder = Ptr<FecDecoder>(new FecDecoder(blockSize, interleavingDepth));
 
     NS_TEST_ASSERT_MSG_NE(decoder, 0, "Decoder creation failed");
 
@@ -344,8 +344,8 @@ FecEndToEndTest::DoRun(void)
     // Create encoder and decoder with LoWAR(8, 4)
     uint32_t blockSize = 8;
     uint32_t interleavingDepth = 4;
-    Ptr<FecEncoder> encoder = CreateObject<FecEncoder>(blockSize, interleavingDepth);
-    Ptr<FecDecoder> decoder = CreateObject<FecDecoder>(blockSize, interleavingDepth);
+    Ptr<FecEncoder> encoder = Ptr<FecEncoder>(new FecEncoder(blockSize, interleavingDepth));
+    Ptr<FecDecoder> decoder = Ptr<FecDecoder>(new FecDecoder(blockSize, interleavingDepth));
 
     // Encode a full block
     std::vector<Ptr<Packet>> originalPackets;

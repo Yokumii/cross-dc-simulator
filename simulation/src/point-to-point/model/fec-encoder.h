@@ -12,6 +12,7 @@
 
 #include <vector>
 #include <map>
+#include "ns3/object.h"
 #include "ns3/packet.h"
 #include "ns3/ptr.h"
 
@@ -36,9 +37,20 @@ namespace ns3 {
  * 4. Reset block and continue with next bPSN
  */
 
-class FecEncoder
+class FecEncoder : public Object
 {
 public:
+  /**
+   * \brief Get the type ID.
+   * \return the object TypeId
+   */
+  static TypeId GetTypeId(void);
+
+  /**
+   * \brief Default constructor (required by NS3 Object system)
+   */
+  FecEncoder();
+
   /**
    * \brief Constructor
    * \param blockSize Number of packets per coding block (r parameter)

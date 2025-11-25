@@ -22,6 +22,8 @@
 #include "ns3/qbb-net-device.h"
 #include "fec-header.h"
 #include "fec-xor-engine.h"
+#include "fec-encoder.h"
+#include "fec-decoder.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -562,8 +564,8 @@ QbbNetDevice::EnableFec(bool enable)
     if (enable && !m_fecEnabled)
     {
         // Create encoder and decoder
-        m_fecEncoder = Create<FecEncoder>(m_fecBlockSize, m_fecInterleavingDepth);
-        m_fecDecoder = Create<FecDecoder>(m_fecBlockSize, m_fecInterleavingDepth);
+        m_fecEncoder = Ptr<FecEncoder>(new FecEncoder(m_fecBlockSize, m_fecInterleavingDepth));
+        m_fecDecoder = Ptr<FecDecoder>(new FecDecoder(m_fecBlockSize, m_fecInterleavingDepth));
         m_fecEnabled = true;
 
         NS_LOG_INFO("FEC enabled on device with parameters: r=" << m_fecBlockSize

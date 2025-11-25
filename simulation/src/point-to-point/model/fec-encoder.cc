@@ -11,6 +11,7 @@
 #include "fec-header.h"
 #include "fec-xor-engine.h"
 #include "ns3/log.h"
+#include "ns3/object.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -18,6 +19,40 @@
 NS_LOG_COMPONENT_DEFINE("FecEncoder");
 
 namespace ns3 {
+
+NS_OBJECT_ENSURE_REGISTERED(FecEncoder);
+
+TypeId
+FecEncoder::GetTypeId(void)
+{
+  static TypeId tid = TypeId("ns3::FecEncoder")
+    .SetParent<Object>()
+    .SetGroupName("PointToPoint")
+    .AddConstructor<FecEncoder>()
+  ;
+  return tid;
+}
+
+FecEncoder::FecEncoder()
+  : m_blockSize(64),
+    m_interleavingDepth(8),
+    m_interleavingIndex(2),
+    m_currentBlockBase(0),
+    m_packetsInBlock(0)
+{
+  NS_LOG_FUNCTION_NOARGS();
+
+  // Initialize coding layers
+  m_codingLayers.resize(m_interleavingDepth);
+
+  for (uint32_t layer = 0; layer < m_interleavingDepth; ++layer)
+    {
+      uint32_t bucketsInLayer = GetBucketsPerLayer(layer);
+      m_codingLayers[layer].resize(bucketsInLayer);
+
+      NS_LOG_DEBUG("Layer " << layer << " has " << bucketsInLayer << " buckets");
+    }
+}
 
 FecEncoder::FecEncoder(uint32_t blockSize, uint32_t interleavingDepth)
   : m_blockSize(blockSize),

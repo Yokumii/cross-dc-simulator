@@ -13,6 +13,7 @@
 #include <vector>
 #include <map>
 #include <bitset>
+#include "ns3/object.h"
 #include "ns3/packet.h"
 #include "ns3/ptr.h"
 
@@ -36,13 +37,24 @@ namespace ns3 {
  * 4. Iteratively attempt recovery as new packets/repairs arrive
  */
 
-class FecDecoder
+class FecDecoder : public Object
 {
 public:
+  /**
+   * \brief Get the type ID.
+   * \return the object TypeId
+   */
+  static TypeId GetTypeId(void);
+
   /**
    * \brief Maximum block size supported (for bitmap)
    */
   static const uint32_t MAX_BLOCK_SIZE = 256;
+
+  /**
+   * \brief Default constructor (required by NS3 Object system)
+   */
+  FecDecoder();
 
   /**
    * \brief Constructor

@@ -10,11 +10,34 @@
 #include "fec-decoder.h"
 #include "fec-xor-engine.h"
 #include "ns3/log.h"
+#include "ns3/object.h"
 #include <algorithm>
 
 NS_LOG_COMPONENT_DEFINE("FecDecoder");
 
 namespace ns3 {
+
+NS_OBJECT_ENSURE_REGISTERED(FecDecoder);
+
+TypeId
+FecDecoder::GetTypeId(void)
+{
+  static TypeId tid = TypeId("ns3::FecDecoder")
+    .SetParent<Object>()
+    .SetGroupName("PointToPoint")
+    .AddConstructor<FecDecoder>()
+  ;
+  return tid;
+}
+
+FecDecoder::FecDecoder()
+  : m_blockSize(64),
+    m_interleavingDepth(8),
+    m_recoveredCount(0),
+    m_unrecoverableCount(0)
+{
+  NS_LOG_FUNCTION_NOARGS();
+}
 
 FecDecoder::FecDecoder(uint32_t blockSize, uint32_t interleavingDepth)
   : m_blockSize(blockSize),
@@ -94,8 +117,7 @@ FecDecoder::ReceiveRepairPacket(Ptr<Packet> repairPacket,
   NS_LOG_DEBUG("Stored repair packet ISN=" << isn << " for block " << basePSN
                                             << " with recipe size " << recipe.size());
 
-  // Immediately attempt recovery
-  RecoverLostPackets();
+  // Note: Caller should call RecoverLostPackets() to attempt recovery
 }
 
 std::vector<Ptr<Packet>>
