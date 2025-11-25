@@ -28,11 +28,16 @@ def build(bld):
         'model/conweave-routing.cc',
         'model/conweave-voq.cc',
 		'helper/selective-packet-queue.cc',
+        'model/fec-header.cc',
+        'model/fec-xor-engine.cc',
+        'model/fec-encoder.cc',
+        'model/fec-decoder.cc',
         ]
 
     module_test = bld.create_ns3_module_test_library('point-to-point')
     module_test.source = [
         'test/point-to-point-test.cc',
+        'test/fec-test.cc',
         ]
 
     headers = bld(features='ns3header')
@@ -64,6 +69,10 @@ def build(bld):
         'model/conweave-routing.h',
         'model/conweave-voq.h',
 		'helper/selective-packet-queue.h',
+        'model/fec-header.h',
+        'model/fec-xor-engine.h',
+        'model/fec-encoder.h',
+        'model/fec-decoder.h',
         ]
 
     if (bld.env['ENABLE_EXAMPLES']):
