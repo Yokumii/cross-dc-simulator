@@ -234,6 +234,10 @@ public:
   };
   
   FecStatistics GetFecStatistics() const;
+  
+  // FEC callbacks
+  void SetFecEventCallback(FecEventCallback cb) { m_fecEventCallback = cb; }
+  void SetFecDebugCallback(FecDebugCallback cb) { m_fecDebugCallback = cb; }
 
 	Ptr<RdmaEgressQueue> m_rdmaEQ;
 	void RdmaEnqueueHighPrioQ(Ptr<Packet> p);
@@ -247,6 +251,14 @@ public:
 	// callback for sent a packet
 	typedef Callback<void, Ptr<RdmaQueuePair>, Ptr<Packet>, Time> RdmaPktSent;
 	RdmaPktSent m_rdmaPktSent;
+	
+	// callback for FEC events
+	typedef Callback<void, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> FecEventCallback;
+	FecEventCallback m_fecEventCallback;
+	
+	// callback for FEC debug logging (detailed decode operations)
+	typedef Callback<void, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> FecDebugCallback;
+	FecDebugCallback m_fecDebugCallback;
 
 	Ptr<RdmaEgressQueue> GetRdmaQueue();
 	void TakeDown(); // take down this device

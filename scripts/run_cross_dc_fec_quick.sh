@@ -112,7 +112,7 @@ INTRA_BW=${INTRA_BW:-"100"}
 INTER_BW=${INTER_BW:-"400"}
 FLOW_SCALE=${FLOW_SCALE:-"10.0"}
 INTRA_ERROR=${INTRA_ERROR:-"0.0"}
-INTER_ERROR=${INTER_ERROR:-"0.05"}
+INTER_ERROR=${INTER_ERROR:-"0.01"}
 INTRA_LATENCY=${INTRA_LATENCY:-"1000"}
 INTER_LATENCY=${INTER_LATENCY:-"400000"}
 
@@ -126,7 +126,7 @@ SCRIPT_TAG="run_cross_dc_fec_quick"
 RUN_DIR="${RESULTS_ROOT}/${SCRIPT_TAG}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "${RUN_DIR}"
 
-cecho "GREEN" "Running cross-dc simulation with FEC (PFC off, IRN on, FEC on)"
+cecho "GREEN" "Running cross-dc simulation with FEC (PFC off, IRN on)"
 cecho "YELLOW" "simul_time=${SIM_TIME}, intra_load=${INTRA_LOAD}, inter_load=${INTER_LOAD}"
 cecho "YELLOW" "intra_error=${INTRA_ERROR}, inter_error=${INTER_ERROR}"
 cecho "YELLOW" "intra_latency=${INTRA_LATENCY}ns, inter_latency=${INTER_LATENCY}ns"
@@ -137,31 +137,6 @@ pre_ids=$(ls -1 "${SIM_DIR}/mix/output" 2>/dev/null || true)
 
 pushd "${SIM_DIR}" >/dev/null
 
-# 生成配置文件
-CONFIG_FILE="${RUN_DIR}/config_fec.txt"
-cat > "${CONFIG_FILE}" << EOF
-ENABLE_PFC 1
-ENABLE_IRN 0
-SIMUL_TIME ${SIM_TIME}
-INTRA_LOAD ${INTRA_LOAD}
-INTER_LOAD ${INTER_LOAD}
-K_FAT ${K_FAT}
-NUM_DC ${NUM_DC}
-INTRA_BW ${INTRA_BW}
-INTER_BW ${INTER_BW}
-FLOW_SCALE ${FLOW_SCALE}
-INTRA_ERROR ${INTRA_ERROR}
-INTER_ERROR ${INTER_ERROR}
-INTRA_LATENCY ${INTRA_LATENCY}
-INTER_LATENCY ${INTER_LATENCY}
-FEC_ENABLED ${FEC_ENABLED}
-FEC_BLOCK_SIZE ${FEC_BLOCK_SIZE}
-FEC_INTERLEAVING_DEPTH ${FEC_INTERLEAVING_DEPTH}
-EOF
-
-cecho "GREEN" "Config file created: ${CONFIG_FILE}"
-
-# 运行仿真 - 使用 Python 脚本生成配置并运行
 python3 run_cross_dc.py \
   --pfc 1 \
   --irn 0 \
@@ -181,63 +156,19 @@ python3 run_cross_dc.py \
   --fec-block-size "${FEC_BLOCK_SIZE}" \
   --fec-interleaving-depth "${FEC_INTERLEAVING_DEPTH}"
 
-# 检查是否生成了新的输出目录
-post_ids=$(ls -1 "${SIM_DIR}/mix/output" 2>/dev/null || true)
-new_output_found=0
+popd >/dev/null
 
+# 移动新增的输出ID到 results 目录
+post_ids=$(ls -1 "${SIM_DIR}/mix/output" 2>/dev/null || true)
 for id in ${post_ids}; do
   if ! echo "${pre_ids}" | grep -qx "${id}"; then
     if [ -d "${SIM_DIR}/mix/output/${id}" ]; then
-      # 找到新生成的输出目录
-      OUTPUT_DIR="${SIM_DIR}/mix/output/${id}"
-      new_output_found=1
-
-      # 需要手动修改配置文件以启用 FEC
-      if [ -f "${OUTPUT_DIR}/config.txt" ]; then
-        cecho "YELLOW" "Updating config.txt with FEC parameters..."
-
-        # 添加FEC参数到配置文件
-        if ! grep -q "FEC_ENABLED" "${OUTPUT_DIR}/config.txt"; then
-          echo "FEC_ENABLED ${FEC_ENABLED}" >> "${OUTPUT_DIR}/config.txt"
-          echo "FEC_BLOCK_SIZE ${FEC_BLOCK_SIZE}" >> "${OUTPUT_DIR}/config.txt"
-          echo "FEC_INTERLEAVING_DEPTH ${FEC_INTERLEAVING_DEPTH}" >> "${OUTPUT_DIR}/config.txt"
-          cecho "GREEN" "FEC parameters added to config.txt"
-        fi
-
-        # 重新运行 waf 以使用更新后的配置
-        cecho "YELLOW" "Re-running simulation with FEC enabled..."
-        ./waf --run "cross_dc ${OUTPUT_DIR}/config.txt"
-      fi
-
-      # 移动输出到 results 目录
-      mv "${OUTPUT_DIR}" "${RUN_DIR}/" 2>/dev/null || cp -r "${OUTPUT_DIR}" "${RUN_DIR}/"
-      cecho "GREEN" "Output moved to: ${RUN_DIR}/${id}"
+      mv "${SIM_DIR}/mix/output/${id}" "${RUN_DIR}/" 2>/dev/null || cp -r "${SIM_DIR}/mix/output/${id}" "${RUN_DIR}/"
     fi
   fi
 done
 
-popd >/dev/null
-
-if [ ${new_output_found} -eq 0 ]; then
-  cecho "YELLOW" "No new output directory found. Running simulation directly with waf..."
-
-  # 直接使用配置文件运行
-  pushd "${SIM_DIR}" >/dev/null
-  ./waf --run "cross_dc ${CONFIG_FILE}"
-  popd >/dev/null
-
-  # 再次检查输出
-  post_ids=$(ls -1 "${SIM_DIR}/mix/output" 2>/dev/null || true)
-  for id in ${post_ids}; do
-    if ! echo "${pre_ids}" | grep -qx "${id}"; then
-      if [ -d "${SIM_DIR}/mix/output/${id}" ]; then
-        mv "${SIM_DIR}/mix/output/${id}" "${RUN_DIR}/" 2>/dev/null || cp -r "${SIM_DIR}/mix/output/${id}" "${RUN_DIR}/"
-      fi
-    fi
-  done
-fi
-
-cecho "GREEN" "=========================================="
+cecho "GREEN" "==========================================="
 cecho "GREEN" "FEC simulation completed!"
 cecho "GREEN" "Results saved to: ${RUN_DIR}"
-cecho "GREEN" "=========================================="
+cecho "GREEN" "==========================================="

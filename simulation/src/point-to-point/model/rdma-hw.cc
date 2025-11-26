@@ -156,6 +156,10 @@ void RdmaHw::Setup(QpCompleteCallback cb) {
     m_qpCompleteCallback = cb;
 }
 
+void RdmaHw::SetRtoTimeoutCallback(RtoTimeoutCallback cb) {
+    m_rtoTimeoutCallback = cb;
+}
+
 uint32_t RdmaHw::GetNicIdxOfQp(Ptr<RdmaQueuePair> qp) {
     auto &v = m_rtTable[qp->dip.Get()];
     if (v.size() > 0) {
@@ -876,6 +880,11 @@ void RdmaHw::HandleTimeout(Ptr<RdmaQueuePair> qp, Time rto) {
     if (acc_timeout_count.find(qp->m_flow_id) == acc_timeout_count.end())
         acc_timeout_count[qp->m_flow_id] = 0;
     acc_timeout_count[qp->m_flow_id]++;
+
+    // Call RTO timeout callback if set
+    if (!m_rtoTimeoutCallback.IsNull()) {
+        m_rtoTimeoutCallback(m_node->GetId(), qp, rto, acc_timeout_count[qp->m_flow_id]);
+    }
 
     if (qp->irn.m_enabled) qp->irn.m_recovery = true;
 

@@ -127,14 +127,19 @@ FecDecoder::RecoverLostPackets()
 
   std::vector<Ptr<Packet>> recovered;
 
+  NS_LOG_DEBUG("FEC decoder attempting recovery: repairBuffer=" << m_repairBuffer.size() 
+               << " packets, reorderBuffer=" << m_reorderBuffer.size() << " data packets");
+
   // Try to recover using each repair packet
   for (auto it = m_repairBuffer.begin(); it != m_repairBuffer.end(); ++it)
     {
       if (it->used)
         {
+          NS_LOG_DEBUG("Skipping already-used repair ISN=" << it->isn);
           continue; // Already used this repair
         }
 
+      NS_LOG_DEBUG("Attempting recovery with repair ISN=" << it->isn);
       Ptr<Packet> recoveredPacket = AttemptRecoveryWithRepair(*it);
 
       if (recoveredPacket != 0)
@@ -153,7 +158,7 @@ FecDecoder::RecoverLostPackets()
 
   if (recovered.empty())
     {
-      NS_LOG_DEBUG("No packets recovered in this attempt");
+      NS_LOG_DEBUG("No packets recovered in this attempt (checked " << m_repairBuffer.size() << " repairs)");
     }
 
   return recovered;
@@ -248,21 +253,33 @@ FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
   uint32_t missingPsn = 0;
   uint32_t missingCount = CountMissingInRecipe(repairInfo.recipe, missingPsn);
 
+  // Log recipe analysis
+  std::stringstream recipeStr;
+  recipeStr << "[";
+  for (size_t i = 0; i < repairInfo.recipe.size(); i++) {
+      if (i > 0) recipeStr << ",";
+      recipeStr << repairInfo.recipe[i];
+  }
+  recipeStr << "]";
+  
+  NS_LOG_DEBUG("Analyzing repair ISN=" << repairInfo.isn << " recipe=" << recipeStr.str() 
+               << " missingCount=" << missingCount);
+
   if (missingCount == 0)
     {
-      NS_LOG_DEBUG("Repair ISN=" << repairInfo.isn << " - all packets already received");
+      NS_LOG_DEBUG("Repair ISN=" << repairInfo.isn << " - all packets already received, no recovery needed");
       return 0;
     }
 
   if (missingCount > 1)
     {
       NS_LOG_DEBUG("Repair ISN=" << repairInfo.isn << " - " << missingCount
-                                  << " packets missing (need exactly 1)");
+                                  << " packets missing (need exactly 1 for XOR recovery)");
       return 0;
     }
 
   // Exactly one packet missing - we can recover it!
-  NS_LOG_DEBUG("Attempting recovery of PSN=" << missingPsn << " using repair ISN="
+  NS_LOG_INFO("FEC decoder attempting recovery of PSN=" << missingPsn << " using repair ISN="
                                               << repairInfo.isn);
 
   // Collect received packets from recipe
@@ -331,6 +348,7 @@ FecDecoder::CountMissingInRecipe(const std::vector<uint32_t>& recipe,
                                  uint32_t& missingPsn) const
 {
   uint32_t missingCount = 0;
+  std::vector<uint32_t> missingPsns;
 
   for (uint32_t psn : recipe)
     {
@@ -340,8 +358,22 @@ FecDecoder::CountMissingInRecipe(const std::vector<uint32_t>& recipe,
         {
           missingCount++;
           missingPsn = psn;
+          missingPsns.push_back(psn);
         }
     }
+
+  // Log missing packet analysis
+  if (missingCount > 0) {
+      std::stringstream missingStr;
+      missingStr << "[";
+      for (size_t i = 0; i < missingPsns.size(); i++) {
+          if (i > 0) missingStr << ",";
+          missingStr << missingPsns[i];
+      }
+      missingStr << "]";
+      NS_LOG_DEBUG("Recipe analysis: " << missingCount << " missing PSNs=" << missingStr.str() 
+                   << " bufferSize=" << m_reorderBuffer.size());
+  }
 
   return missingCount;
 }

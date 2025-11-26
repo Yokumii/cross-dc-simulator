@@ -37,6 +37,8 @@ VOQ_MON_DETAIL_FILE mix/output/{id}/{id}_out_voq_per_dst.txt
 UPLINK_MON_FILE mix/output/{id}/{id}_out_uplink.txt
 CONN_MON_FILE mix/output/{id}/{id}_out_conn.txt
 EST_ERROR_MON_FILE mix/output/{id}/{id}_out_est_error.txt
+RTO_MON_FILE mix/output/{id}/{id}_out_rto.txt
+FEC_MON_FILE mix/output/{id}/{id}_out_fec.txt
 
 QLEN_MON_START {qlen_mon_start}
 QLEN_MON_END {qlen_mon_end}
@@ -428,7 +430,7 @@ def main():
     # run simulation
     print("Running simulation...")
     output_log = config_name.replace(".txt", ".log")
-    run_command = "./waf --run 'scratch/cross_dc {config_name}' > {output_log} 2>&1".format(
+    run_command = "NS_LOG='QbbNetDevice=debug|info:FecDecoder=debug|info' ./waf --run 'scratch/cross_dc {config_name}' > {output_log} 2>&1".format(
         config_name=config_name, output_log=output_log)
     
     with open("./mix/.history", "a") as history:

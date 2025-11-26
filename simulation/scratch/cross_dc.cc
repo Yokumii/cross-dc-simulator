@@ -115,7 +115,8 @@ std::string voq_mon_detail_file = "voq_detail.txt";
 std::string uplink_mon_file = "uplink.txt";
 std::string conn_mon_file = "conn.txt";
 std::string est_error_output_file = "est_error.txt";
-std::string drop_mon_file = "drop.txt";
+std::string rto_mon_file = "rto.txt";
+std::string fec_mon_file = "fec.txt";
 
 // CC params
 double alpha_resume_interval = 55, rp_timer = 300, ewma_gain = 1 / 16;
@@ -539,6 +540,43 @@ void on_phy_drop(FILE *fout, Ptr<QbbNetDevice> dev, Ptr<const Packet> pkt) {
             (unsigned long)Simulator::Now().GetNanoSeconds(),
             0, nodeId, ifIndex,
             srcId, dstId, sport, dport);
+    fflush(fout);
+}
+
+/**
+ * @brief RTO timeout retransmission logging
+ * Format: time_ns node_id flow_id sip dip sport dport snd_una snd_nxt rto_ns timeout_count
+ */
+void on_rto_timeout(FILE *fout, uint32_t nodeId, Ptr<RdmaQueuePair> qp, Time rto, uint32_t timeoutCount) {
+    if (!fout || !qp) return;
+    uint32_t srcId = Settings::ip_to_node_id(qp->sip);
+    uint32_t dstId = Settings::ip_to_node_id(qp->dip);
+    fprintf(fout, "%lu %u %d %u %u %u %u %lu %lu %lu %u\n",
+            (unsigned long)Simulator::Now().GetNanoSeconds(),
+            nodeId,
+            qp->m_flow_id,
+            srcId, dstId,
+            qp->sport, qp->dport,
+            (unsigned long)qp->snd_una,
+            (unsigned long)qp->snd_nxt,
+            (unsigned long)rto.GetNanoSeconds(),
+            timeoutCount);
+    fflush(fout);
+}
+
+/**
+ * @brief FEC debug logging - detailed decode operations
+ * log_type: 0=data_recv, 1=repair_recv, 2=recovery_attempt, 3=recovery_result
+ * Format: time_ns node_id log_type psn/isn param1 param2 param3
+ */
+void on_fec_debug(FILE *fout, uint32_t nodeId, uint32_t logType,
+                  uint32_t param0, uint32_t param1, uint32_t param2, uint32_t param3) {
+    if (!fout) return;
+    fprintf(fout, "%lu %u %u %u %u %u %u\n",
+            (unsigned long)Simulator::Now().GetNanoSeconds(),
+            nodeId,
+            logType,
+            param0, param1, param2, param3);
     fflush(fout);
 }
 
@@ -1057,9 +1095,12 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("PFC_OUTPUT_FILE") == 0) {
                 conf >> pfc_output_file;
                 std::cerr << "PFC_OUTPUT_FILE\t\t\t\t" << pfc_output_file << '\n';
-        } else if (key.compare("DROP_MON_FILE") == 0) {
-            conf >> drop_mon_file;
-            std::cerr << "DROP_MON_FILE\t\t\t\t" << drop_mon_file << '\n';
+        } else if (key.compare("RTO_MON_FILE") == 0) {
+            conf >> rto_mon_file;
+            std::cerr << "RTO_MON_FILE\t\t\t\t" << rto_mon_file << '\n';
+        } else if (key.compare("FEC_MON_FILE") == 0) {
+            conf >> fec_mon_file;
+            std::cerr << "FEC_MON_FILE\t\t\t\t" << fec_mon_file << '\n';
             } else if (key.compare("LINK_DOWN") == 0) {
                 conf >> link_down_time >> link_down_A >> link_down_B;
                 std::cerr << "LINK_DOWN\t\t\t\t" << link_down_time << ' ' << link_down_A << ' '
@@ -1290,7 +1331,8 @@ int main(int argc, char *argv[]) {
     rem->SetAttribute("ErrorUnit", StringValue("ERROR_UNIT_PACKET"));
 
     pfc_file = fopen(pfc_output_file.c_str(), "w");
-    FILE* drop_output = fopen(drop_mon_file.c_str(), "w");
+    FILE* rto_output = fopen(rto_mon_file.c_str(), "w");
+    FILE* fec_output = fopen(fec_mon_file.c_str(), "w");
 
     QbbHelper qbb;
     Ipv4AddressHelper ipv4;
@@ -1371,20 +1413,22 @@ int main(int argc, char *argv[]) {
             "QbbPfc", MakeBoundCallback(&get_pfc, pfc_file, DynamicCast<QbbNetDevice>(d.Get(1))));
 
         // setup DROP trace: connect PHY RX drop trace with bound file handle
-        DynamicCast<QbbNetDevice>(d.Get(0))->TraceConnectWithoutContext(
-            "PhyRxDrop", MakeBoundCallback(&on_phy_drop, drop_output, DynamicCast<QbbNetDevice>(d.Get(0))));
-        DynamicCast<QbbNetDevice>(d.Get(1))->TraceConnectWithoutContext(
-            "PhyRxDrop", MakeBoundCallback(&on_phy_drop, drop_output, DynamicCast<QbbNetDevice>(d.Get(1))));
+        // DISABLED: Replaced with RTO timeout monitoring
+        // DynamicCast<QbbNetDevice>(d.Get(0))->TraceConnectWithoutContext(
+        //     "PhyRxDrop", MakeBoundCallback(&on_phy_drop, rto_output, DynamicCast<QbbNetDevice>(d.Get(0))));
+        // DynamicCast<QbbNetDevice>(d.Get(1))->TraceConnectWithoutContext(
+        //     "PhyRxDrop", MakeBoundCallback(&on_phy_drop, rto_output, DynamicCast<QbbNetDevice>(d.Get(1))));
 
         // setup switch admission drop trace (requires SwitchNode SwDrop trace)
-        if (snode->GetNodeType() > 0) {
-            Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(snode);
-            if (sw) {
-                // bind switch device0 as context to get node id; devIndex will be provided by trace
-                sw->TraceConnectWithoutContext(
-                    "SwDrop", MakeBoundCallback(&on_sw_admission_drop, drop_output, DynamicCast<QbbNetDevice>(d.Get(0))));
-            }
-        }
+        // DISABLED: Replaced with RTO timeout monitoring
+        // if (snode->GetNodeType() > 0) {
+        //     Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(snode);
+        //     if (sw) {
+        //         // bind switch device0 as context to get node id; devIndex will be provided by trace
+        //         sw->TraceConnectWithoutContext(
+        //             "SwDrop", MakeBoundCallback(&on_sw_admission_drop, rto_output, DynamicCast<QbbNetDevice>(d.Get(0))));
+        //     }
+        // }
     }
 
     std::cout << "(AVG) NIC RATE: " << get_nic_rate(n) << std::endl;
@@ -1464,6 +1508,8 @@ int main(int argc, char *argv[]) {
                 if (dev) {
                     dev->SetFecParameters(fec_block_size, fec_interleaving_depth);
                     dev->EnableFec(true);
+                    // Setup FEC debug callback
+                    dev->m_fecDebugCallback = MakeBoundCallback(on_fec_debug, fec_output);
                 }
             }
         }
@@ -1560,6 +1606,9 @@ int main(int argc, char *argv[]) {
             rdma->Init();
             rdma->TraceConnectWithoutContext("QpComplete",
                                              MakeBoundCallback(qp_finish, fct_output));
+            
+            // Setup RTO timeout callback
+            rdmaHw->SetRtoTimeoutCallback(MakeBoundCallback(on_rto_timeout, rto_output));
         }
     }
 

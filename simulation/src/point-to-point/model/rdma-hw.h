@@ -47,8 +47,13 @@ class RdmaHw : public Object {
     typedef Callback<void, Ptr<RdmaQueuePair>> QpCompleteCallback;
     QpCompleteCallback m_qpCompleteCallback;
 
+    // rto timeout callback
+    typedef Callback<void, uint32_t, Ptr<RdmaQueuePair>, Time, uint32_t> RtoTimeoutCallback;
+    RtoTimeoutCallback m_rtoTimeoutCallback;
+
     void SetNode(Ptr<Node> node);
     void Setup(QpCompleteCallback cb);  // setup shared data and callbacks with the QbbNetDevice
+    void SetRtoTimeoutCallback(RtoTimeoutCallback cb);  // setup RTO timeout callback
 
     /* Akashic Record of finished QP */
     std::unordered_set<uint64_t> akashic_Qp;    // instance for each src
