@@ -388,7 +388,7 @@ void QbbNetDevice::Receive(Ptr<Packet> packet) {
     // Check for FEC packets if FEC enabled (only at receiving endpoints)
     if (m_fecEnabled && m_node->GetNodeType() == 0)
     {
-        if (ch.l3Prot == 0xFD)  // FEC repair packet
+        if (ch.l3Prot == 0xFB)  // FEC repair packet (use 0xFB, as 0xFD is used by NACK)
         {
             // Remove CustomHeader to access FecHeader
             Ptr<Packet> fecPacket = packet->Copy();
@@ -669,7 +669,7 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     CustomHeader checkHeader(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
     packet->PeekHeader(checkHeader);
 
-    // Control packets: 0xFC (NACK/ACK), 0xFD (FEC repair), 0xFE (PFC), 0xFF (CNP)
+    // Control packets: 0xFB (FEC repair), 0xFC (ACK), 0xFD (NACK), 0xFE (PFC), 0xFF (CNP)
     // Only encode UDP data packets (0x11)
     if (checkHeader.l3Prot != 0x11)
     {
@@ -876,7 +876,7 @@ QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets)
         CustomHeader ch = m_currentBlockHeader;  // Copy the saved header
 
         // Mark this as a repair packet by setting l3Prot to a special value
-        ch.l3Prot = 0xFD;  // Use 0xFD to indicate FEC repair packet (similar to PFC/CNP)
+        ch.l3Prot = 0xFB;  // Use 0xFB to indicate FEC repair packet (0xFD is used by NACK)
 
         NS_LOG_DEBUG("FEC: Created CustomHeader with l3Prot=0x"
                   << std::hex << (uint32_t)ch.l3Prot << std::dec);
