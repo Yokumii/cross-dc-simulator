@@ -235,6 +235,10 @@ public:
   
   FecStatistics GetFecStatistics() const;
   
+  // FEC callback types
+  typedef Callback<void, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> FecEventCallback;
+  typedef Callback<void, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> FecDebugCallback;
+  
   // FEC callbacks
   void SetFecEventCallback(FecEventCallback cb) { m_fecEventCallback = cb; }
   void SetFecDebugCallback(FecDebugCallback cb) { m_fecDebugCallback = cb; }
@@ -252,12 +256,8 @@ public:
 	typedef Callback<void, Ptr<RdmaQueuePair>, Ptr<Packet>, Time> RdmaPktSent;
 	RdmaPktSent m_rdmaPktSent;
 	
-	// callback for FEC events
-	typedef Callback<void, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> FecEventCallback;
+	// callback for FEC events (member variables)
 	FecEventCallback m_fecEventCallback;
-	
-	// callback for FEC debug logging (detailed decode operations)
-	typedef Callback<void, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> FecDebugCallback;
 	FecDebugCallback m_fecDebugCallback;
 
 	Ptr<RdmaEgressQueue> GetRdmaQueue();
