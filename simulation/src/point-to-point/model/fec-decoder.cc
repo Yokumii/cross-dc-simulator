@@ -49,8 +49,14 @@ FecDecoder::FecDecoder(uint32_t blockSize, uint32_t interleavingDepth)
 
   if (blockSize > MAX_BLOCK_SIZE)
     {
-      NS_LOG_ERROR("Block size " << blockSize << " exceeds maximum " << MAX_BLOCK_SIZE);
+      std::cerr << "[FEC-DECODER-INIT] WARNING: Block size " << blockSize
+                << " exceeds maximum " << MAX_BLOCK_SIZE
+                << ", truncating to " << MAX_BLOCK_SIZE << std::endl;
+      m_blockSize = MAX_BLOCK_SIZE;
     }
+
+  std::cout << "[FEC-DECODER-INIT] Created decoder with blockSize=" << m_blockSize
+            << " interleavingDepth=" << m_interleavingDepth << std::endl;
 }
 
 FecDecoder::~FecDecoder()
@@ -75,6 +81,22 @@ FecDecoder::ReceiveDataPacket(Ptr<Packet> packet, uint32_t psn)
   // Calculate block base PSN
   uint32_t basePSN = (psn / m_blockSize) * m_blockSize;
   uint32_t relativePsn = psn - basePSN;
+
+  std::cout << "[FEC-DECODER-RX-DATA] PSN=" << psn
+            << " basePSN=" << basePSN
+            << " relativePsn=" << relativePsn
+            << " blockSize=" << m_blockSize
+            << " MAX_BLOCK_SIZE=" << MAX_BLOCK_SIZE << std::endl;
+
+  // 边界检查：防止数组越界
+  if (relativePsn >= MAX_BLOCK_SIZE)
+    {
+      std::cerr << "[FEC-DECODER-ERROR] relativePsn " << relativePsn
+                << " exceeds MAX_BLOCK_SIZE " << MAX_BLOCK_SIZE
+                << " (PSN=" << psn << ", basePSN=" << basePSN
+                << ", blockSize=" << m_blockSize << ")" << std::endl;
+      return;
+    }
 
   // Update block state
   BlockState& state = GetOrCreateBlockState(basePSN);
@@ -102,6 +124,35 @@ FecDecoder::ReceiveRepairPacket(Ptr<Packet> repairPacket,
     {
       NS_LOG_WARN("ReceiveRepairPacket called with null packet");
       return;
+    }
+
+  std::cout << "[FEC-DECODER-RX-REPAIR] basePSN=" << basePSN
+            << " ISN=" << isn
+            << " recipe_size=" << recipe.size()
+            << " blockSize=" << m_blockSize << std::endl;
+
+  // 验证 recipe 中的 PSN 是否合理
+  for (size_t i = 0; i < recipe.size(); ++i)
+    {
+      uint32_t psn = recipe[i];
+      uint32_t expectedBasePSN = (psn / m_blockSize) * m_blockSize;
+
+      if (expectedBasePSN != basePSN)
+        {
+          std::cerr << "[FEC-DECODER-ERROR-REPAIR] Recipe PSN " << psn
+                    << " has basePSN=" << expectedBasePSN
+                    << " but repair packet claims basePSN=" << basePSN
+                    << " (blockSize=" << m_blockSize << ")" << std::endl;
+        }
+
+      uint32_t relativePsn = psn - basePSN;
+      if (relativePsn >= MAX_BLOCK_SIZE)
+        {
+          std::cerr << "[FEC-DECODER-ERROR-REPAIR] Recipe PSN " << psn
+                    << " results in relativePsn=" << relativePsn
+                    << " which exceeds MAX_BLOCK_SIZE=" << MAX_BLOCK_SIZE
+                    << " (basePSN=" << basePSN << ")" << std::endl;
+        }
     }
 
   // Store repair packet info
@@ -332,6 +383,22 @@ FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
   uint32_t basePSN = (missingPsn / m_blockSize) * m_blockSize;
   uint32_t relativePsn = missingPsn - basePSN;
 
+  std::cout << "[FEC-DECODER-RECOVER] missingPsn=" << missingPsn
+            << " basePSN=" << basePSN
+            << " relativePsn=" << relativePsn
+            << " blockSize=" << m_blockSize
+            << " MAX_BLOCK_SIZE=" << MAX_BLOCK_SIZE << std::endl;
+
+  // 边界检查：防止数组越界
+  if (relativePsn >= MAX_BLOCK_SIZE)
+    {
+      std::cerr << "[FEC-DECODER-ERROR-RECOVER] relativePsn " << relativePsn
+                << " exceeds MAX_BLOCK_SIZE " << MAX_BLOCK_SIZE
+                << " (missingPsn=" << missingPsn << ", basePSN=" << basePSN
+                << ", blockSize=" << m_blockSize << ")" << std::endl;
+      return recoveredPacket;
+    }
+
   BlockState& state = GetOrCreateBlockState(basePSN);
   state.receivedBits[relativePsn] = true;
   state.receivedCount++;
@@ -387,6 +454,9 @@ FecDecoder::GetOrCreateBlockState(uint32_t basePSN)
     {
       return it->second;
     }
+
+  std::cout << "[FEC-DECODER-CREATE-BLOCK] Creating new block state for basePSN=" << basePSN
+            << " blockSize=" << m_blockSize << std::endl;
 
   // Create new block state
   BlockState newState;

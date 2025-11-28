@@ -63,6 +63,18 @@ FecEncoder::FecEncoder(uint32_t blockSize, uint32_t interleavingDepth)
 {
   NS_LOG_FUNCTION(blockSize << interleavingDepth);
 
+  // 边界检查：确保 blockSize 不超过上限
+  if (blockSize > MAX_BLOCK_SIZE)
+    {
+      std::cerr << "[FEC-ENCODER-INIT] WARNING: Block size " << blockSize
+                << " exceeds maximum " << MAX_BLOCK_SIZE
+                << ", truncating to " << MAX_BLOCK_SIZE << std::endl;
+      m_blockSize = MAX_BLOCK_SIZE;
+    }
+
+  std::cout << "[FEC-ENCODER-INIT] Created encoder with blockSize=" << m_blockSize
+            << " interleavingDepth=" << m_interleavingDepth << std::endl;
+
   // Initialize coding layers
   m_codingLayers.resize(m_interleavingDepth);
 

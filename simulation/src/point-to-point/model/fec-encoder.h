@@ -47,6 +47,11 @@ public:
   static TypeId GetTypeId(void);
 
   /**
+   * \brief Maximum block size supported
+   */
+  static const uint32_t MAX_BLOCK_SIZE = 256;
+
+  /**
    * \brief Default constructor (required by NS3 Object system)
    */
   FecEncoder();
