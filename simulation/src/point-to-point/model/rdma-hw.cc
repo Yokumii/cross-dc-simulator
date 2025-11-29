@@ -467,6 +467,16 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
             // ch.sip, sport);
             return 1;
         } else {
+            // 调试输出：打印QueuePair查找失败的详细信息
+            std::cout << "[RDMA-QP-ERROR] Node=" << m_node->GetId()
+                      << " Type=" << (ch.l3Prot == 0xFC ? "ACK" : "NACK")
+                      << " ch.sip=" << ch.sip << " port=" << port << " sport=" << sport
+                      << " qIndex=" << qIndex << " key=0x" << std::hex << key << std::dec
+                      << " seq=" << seq << std::endl;
+            std::cout << "[RDMA-QP-ERROR] Available QPs in m_qpMap:" << std::endl;
+            for (auto it = m_qpMap.begin(); it != m_qpMap.end(); ++it) {
+                std::cout << "  key=0x" << std::hex << it->first << std::dec << std::endl;
+            }
             printf("ERROR: Node: %u %s - NIC cannot find the flow\n", m_node->GetId(),
                    (ch.l3Prot == 0xFC ? "ACK" : "NACK"));
             exit(1);

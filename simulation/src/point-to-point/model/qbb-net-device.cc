@@ -400,7 +400,7 @@ void QbbNetDevice::Receive(Ptr<Packet> packet) {
             fecPacket->PeekHeader(fecHeader);
 
             // Process FEC repair packet
-            FecReceive(fecPacket);
+            FecReceive(fecPacket, tempCh);  // Pass CustomHeader to FecReceive
 
             // Don't forward repair packets to upper layers
             return;
@@ -421,8 +421,16 @@ void QbbNetDevice::Receive(Ptr<Packet> packet) {
             // Store data packet in FEC decoder
             m_fecDecoder->ReceiveDataPacket(fecPacket, psn);
 
-            // Log data packet reception for debugging
+            // Save CustomHeader from first packet of the block (for recovery)
             uint32_t basePSN = (psn / m_fecBlockSize) * m_fecBlockSize;
+            if (psn == basePSN)
+            {
+                m_receivedBlockHeader = tempCh;
+                NS_LOG_DEBUG("FEC RX: Saved CustomHeader from first packet of block " << basePSN
+                          << " sip=" << m_receivedBlockHeader.sip << " dip=" << m_receivedBlockHeader.dip);
+            }
+
+            // Log data packet reception for debugging
             NS_LOG_DEBUG("FEC Node " << m_node->GetId() << " received DATA packet: PSN=" << psn
                          << " basePSN=" << basePSN << " blockSize=" << m_fecBlockSize);
             
@@ -713,14 +721,24 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     packet->AddHeader(savedCh);
 
     // Now packet has structure: [CustomHeader][FecHeader][Payload]
-    // Create a copy for encoding
-    Ptr<Packet> encodingPacket = packet->Copy();
+    // IMPORTANT: For FEC encoding, we should ONLY encode [FecHeader][Payload]
+    // NOT including CustomHeader, because:
+    // 1. CustomHeader will be removed before FecReceive on the receiver side
+    // 2. Encoding CustomHeader causes mismatch between encoder and decoder
+    // 3. This leads to corrupted recovered packets
 
+    // Create a copy WITHOUT CustomHeader for encoding
+    Ptr<Packet> encodingPacket = packet->Copy();
+    CustomHeader chForEncoding(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+    encodingPacket->RemoveHeader(chForEncoding);  // Remove CustomHeader before encoding
+
+    // Now encodingPacket has structure: [FecHeader][Payload]
     // Encode with FEC encoder
     m_fecEncoder->EncodePacket(encodingPacket, m_txSeqNum);
     m_fecEncodedPackets++;
 
-    NS_LOG_DEBUG("FEC encoded packet PSN=" << m_txSeqNum << " (block " << basePSN << ")");
+    NS_LOG_DEBUG("FEC encoded packet PSN=" << m_txSeqNum << " (block " << basePSN << ")"
+                 << " encoded_size=" << encodingPacket->GetSize());
 
     // Increment sequence number
     m_txSeqNum++;
@@ -753,7 +771,7 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
 }
 
 void
-QbbNetDevice::FecReceive(Ptr<Packet> packet)
+QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
 {
     NS_LOG_FUNCTION(this << packet);
 
@@ -772,6 +790,15 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet)
         // Data packet - store in decoder
         uint32_t psn = fecHeader.GetPSN();
         m_fecDecoder->ReceiveDataPacket(packet->Copy(), psn);
+
+        // Save CustomHeader from first packet of the block (for recovery)
+        uint32_t basePSN = (psn / m_fecBlockSize) * m_fecBlockSize;
+        if (psn == basePSN)
+        {
+            m_receivedBlockHeader = ch;
+            NS_LOG_DEBUG("FEC RX: Saved CustomHeader from first packet of block " << basePSN
+                      << " sip=" << m_receivedBlockHeader.sip << " dip=" << m_receivedBlockHeader.dip);
+        }
 
         NS_LOG_DEBUG("FEC received data packet PSN=" << psn);
     }
@@ -826,29 +853,31 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet)
             // Forward recovered packets to upper layer
             for (auto recoveredPkt : recoveredPackets)
             {
-                // Re-add FEC header to recovered packet so it looks like original
+                // Recovered packet has structure: [FecHeader][Payload]
+                // We need to use the saved CustomHeader from first packet of the block
                 FecHeader recoveredFecHeader;
                 recoveredPkt->PeekHeader(recoveredFecHeader);
-                
-                // Removed: packet recovered event (event_type=2) - using debug callback only
-                // if (!m_fecEventCallback.IsNull()) {
-                //     m_fecEventCallback(m_node->GetId(), 2, basePSN, recoveredFecHeader.GetPSN(), isn);
-                // }
+
+                // Use the saved CustomHeader from first packet of the block
+                CustomHeader ch = m_receivedBlockHeader;
+                ch.getInt = 1;
+
+                // 调试输出：检查使用的CustomHeader内容
+                std::cout << "[FEC-RECOVER-NIC] Node=" << m_node->GetId()
+                          << " PSN=" << recoveredFecHeader.GetPSN()
+                          << " sip=" << ch.sip << " dip=" << ch.dip
+                          << " l3Prot=0x" << std::hex << (int)ch.l3Prot << std::dec
+                          << " sport=" << ch.udp.sport << " dport=" << ch.udp.dport
+                          << " seq=" << ch.udp.seq << " pg=" << ch.udp.pg << std::endl;
 
                 // Process as normal received packet
                 if (m_node->GetNodeType() > 0)  // switch
                 {
                     recoveredPkt->AddPacketTag(FlowIdTag(m_ifIndex));
-                    CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
-                    ch.getInt = 1;
-                    recoveredPkt->PeekHeader(ch);
                     m_node->SwitchReceiveFromDevice(this, recoveredPkt, ch);
                 }
                 else  // NIC
                 {
-                    CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
-                    ch.getInt = 1;
-                    recoveredPkt->PeekHeader(ch);
                     m_rdmaReceiveCb(recoveredPkt, ch);
                 }
             }

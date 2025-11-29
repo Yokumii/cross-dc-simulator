@@ -198,18 +198,19 @@ public:
 
   // FEC transmission and reception methods
   void FecTransmit(Ptr<Packet> packet);
-  void FecReceive(Ptr<Packet> packet);
+  void FecReceive(Ptr<Packet> packet, const CustomHeader& ch);  // Added CustomHeader parameter
   void SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets);
 
   bool m_fecEnabled;                    ///< Whether FEC is enabled
   uint32_t m_fecBlockSize;              ///< FEC block size (r parameter)
   uint32_t m_fecInterleavingDepth;      ///< FEC interleaving depth (c parameter)
-  
+
   Ptr<FecEncoder> m_fecEncoder;         ///< FEC encoder for this device
   Ptr<FecDecoder> m_fecDecoder;         ///< FEC decoder for this device
 
   uint32_t m_txSeqNum;                  ///< Transmit sequence number for FEC
-  CustomHeader m_currentBlockHeader;    ///< CustomHeader from first packet of current FEC block
+  CustomHeader m_currentBlockHeader;    ///< CustomHeader from first packet of current FEC block (TX)
+  CustomHeader m_receivedBlockHeader;   ///< CustomHeader from first packet of received FEC block (RX)
 
   // FEC statistics
   uint32_t m_fecEncodedPackets;         ///< Number of data packets encoded

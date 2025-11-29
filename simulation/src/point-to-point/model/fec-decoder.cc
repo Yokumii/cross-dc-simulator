@@ -336,11 +336,15 @@ FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
   // Collect received packets from recipe
   std::vector<Ptr<Packet>> receivedPackets;
 
+  std::cout << "[FEC-DECODER-RECIPE] Recovering PSN=" << missingPsn << " using ISN=" << repairInfo.isn
+            << " repair_size=" << repairInfo.packet->GetSize() << std::endl;
+
   for (uint32_t psn : repairInfo.recipe)
     {
       if (psn == missingPsn)
         {
           receivedPackets.push_back(0); // Placeholder for missing packet
+          std::cout << "[FEC-DECODER-RECIPE]   PSN=" << psn << " (MISSING)" << std::endl;
         }
       else
         {
@@ -348,9 +352,11 @@ FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
           if (pkt == 0)
             {
               NS_LOG_ERROR("Recipe claims PSN=" << psn << " received, but not in buffer!");
+              std::cout << "[FEC-DECODER-RECIPE-ERROR] PSN=" << psn << " not found in buffer!" << std::endl;
               return 0;
             }
           receivedPackets.push_back(pkt);
+          std::cout << "[FEC-DECODER-RECIPE]   PSN=" << psn << " size=" << pkt->GetSize() << std::endl;
         }
     }
 
@@ -373,8 +379,25 @@ FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
   if (recoveredPacket == 0)
     {
       NS_LOG_ERROR("XOR recovery failed for PSN=" << missingPsn);
+      std::cout << "[FEC-DECODER-XOR-ERROR] Recovery failed for PSN=" << missingPsn << std::endl;
       return 0;
     }
+
+  // 调试输出：打印恢复包的大小和前几个字节
+  uint32_t recoveredSize = recoveredPacket->GetSize();
+  std::cout << "[FEC-DECODER-XOR-SUCCESS] Recovered PSN=" << missingPsn
+            << " size=" << recoveredSize << std::endl;
+
+  if (recoveredSize > 0) {
+      uint8_t header[32];  // 读取前32字节
+      uint32_t bytesToRead = std::min(recoveredSize, 32u);
+      recoveredPacket->CopyData(header, bytesToRead);
+      std::cout << "[FEC-DECODER-XOR-DATA] First " << bytesToRead << " bytes (hex): ";
+      for (uint32_t i = 0; i < bytesToRead; i++) {
+          printf("%02x ", header[i]);
+      }
+      std::cout << std::endl;
+  }
 
   // Store recovered packet in reordering buffer
   m_reorderBuffer[missingPsn] = recoveredPacket->Copy();
