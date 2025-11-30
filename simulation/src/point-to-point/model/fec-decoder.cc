@@ -55,8 +55,6 @@ FecDecoder::FecDecoder(uint32_t blockSize, uint32_t interleavingDepth)
       m_blockSize = MAX_BLOCK_SIZE;
     }
 
-  std::cout << "[FEC-DECODER-INIT] Created decoder with blockSize=" << m_blockSize
-            << " interleavingDepth=" << m_interleavingDepth << std::endl;
 }
 
 FecDecoder::~FecDecoder()
@@ -81,12 +79,6 @@ FecDecoder::ReceiveDataPacket(Ptr<Packet> packet, uint32_t psn)
   // Calculate block base PSN
   uint32_t basePSN = (psn / m_blockSize) * m_blockSize;
   uint32_t relativePsn = psn - basePSN;
-
-  std::cout << "[FEC-DECODER-RX-DATA] PSN=" << psn
-            << " basePSN=" << basePSN
-            << " relativePsn=" << relativePsn
-            << " blockSize=" << m_blockSize
-            << " MAX_BLOCK_SIZE=" << MAX_BLOCK_SIZE << std::endl;
 
   // 边界检查：防止数组越界
   if (relativePsn >= MAX_BLOCK_SIZE)
@@ -125,11 +117,6 @@ FecDecoder::ReceiveRepairPacket(Ptr<Packet> repairPacket,
       NS_LOG_WARN("ReceiveRepairPacket called with null packet");
       return;
     }
-
-  std::cout << "[FEC-DECODER-RX-REPAIR] basePSN=" << basePSN
-            << " ISN=" << isn
-            << " recipe_size=" << recipe.size()
-            << " blockSize=" << m_blockSize << std::endl;
 
   // 验证 recipe 中的 PSN 是否合理
   for (size_t i = 0; i < recipe.size(); ++i)
@@ -336,15 +323,11 @@ FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
   // Collect received packets from recipe
   std::vector<Ptr<Packet>> receivedPackets;
 
-  std::cout << "[FEC-DECODER-RECIPE] Recovering PSN=" << missingPsn << " using ISN=" << repairInfo.isn
-            << " repair_size=" << repairInfo.packet->GetSize() << std::endl;
-
   for (uint32_t psn : repairInfo.recipe)
     {
       if (psn == missingPsn)
         {
           receivedPackets.push_back(0); // Placeholder for missing packet
-          std::cout << "[FEC-DECODER-RECIPE]   PSN=" << psn << " (MISSING)" << std::endl;
         }
       else
         {
@@ -352,11 +335,9 @@ FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
           if (pkt == 0)
             {
               NS_LOG_ERROR("Recipe claims PSN=" << psn << " received, but not in buffer!");
-              std::cout << "[FEC-DECODER-RECIPE-ERROR] PSN=" << psn << " not found in buffer!" << std::endl;
               return 0;
             }
           receivedPackets.push_back(pkt);
-          std::cout << "[FEC-DECODER-RECIPE]   PSN=" << psn << " size=" << pkt->GetSize() << std::endl;
         }
     }
 
@@ -379,25 +360,8 @@ FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
   if (recoveredPacket == 0)
     {
       NS_LOG_ERROR("XOR recovery failed for PSN=" << missingPsn);
-      std::cout << "[FEC-DECODER-XOR-ERROR] Recovery failed for PSN=" << missingPsn << std::endl;
       return 0;
     }
-
-  // 调试输出：打印恢复包的大小和前几个字节
-  uint32_t recoveredSize = recoveredPacket->GetSize();
-  std::cout << "[FEC-DECODER-XOR-SUCCESS] Recovered PSN=" << missingPsn
-            << " size=" << recoveredSize << std::endl;
-
-  if (recoveredSize > 0) {
-      uint8_t header[32];  // 读取前32字节
-      uint32_t bytesToRead = std::min(recoveredSize, 32u);
-      recoveredPacket->CopyData(header, bytesToRead);
-      std::cout << "[FEC-DECODER-XOR-DATA] First " << bytesToRead << " bytes (hex): ";
-      for (uint32_t i = 0; i < bytesToRead; i++) {
-          printf("%02x ", header[i]);
-      }
-      std::cout << std::endl;
-  }
 
   // Store recovered packet in reordering buffer
   m_reorderBuffer[missingPsn] = recoveredPacket->Copy();
@@ -405,12 +369,6 @@ FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
   // Update block state
   uint32_t basePSN = (missingPsn / m_blockSize) * m_blockSize;
   uint32_t relativePsn = missingPsn - basePSN;
-
-  std::cout << "[FEC-DECODER-RECOVER] missingPsn=" << missingPsn
-            << " basePSN=" << basePSN
-            << " relativePsn=" << relativePsn
-            << " blockSize=" << m_blockSize
-            << " MAX_BLOCK_SIZE=" << MAX_BLOCK_SIZE << std::endl;
 
   // 边界检查：防止数组越界
   if (relativePsn >= MAX_BLOCK_SIZE)
@@ -477,9 +435,6 @@ FecDecoder::GetOrCreateBlockState(uint32_t basePSN)
     {
       return it->second;
     }
-
-  std::cout << "[FEC-DECODER-CREATE-BLOCK] Creating new block state for basePSN=" << basePSN
-            << " blockSize=" << m_blockSize << std::endl;
 
   // Create new block state
   BlockState newState;

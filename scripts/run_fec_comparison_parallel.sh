@@ -123,7 +123,8 @@ for i in "${!ERROR_RATES[@]}"; do
         mkdir -p "${task_dir}"
 
         # 启动 screen 会话运行仿真
-        cecho "YELLOW" "[$(date +'%H:%M:%S')] 启动场景 ${task_num}/${#ERROR_RATES[@]*#FEC_CONFIGS[@]}: ${task_id}"
+        total_tasks=$((${#ERROR_RATES[@]} * ${#FEC_CONFIGS[@]}))
+        cecho "YELLOW" "[$(date +'%H:%M:%S')] 启动场景 ${task_num}/${total_tasks}: ${task_id}"
 
         screen -dmS "${screen_name}" bash -c "
             cd '${SIM_DIR}'

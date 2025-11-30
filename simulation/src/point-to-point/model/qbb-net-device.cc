@@ -862,14 +862,6 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
                 CustomHeader ch = m_receivedBlockHeader;
                 ch.getInt = 1;
 
-                // 调试输出：检查使用的CustomHeader内容
-                std::cout << "[FEC-RECOVER-NIC] Node=" << m_node->GetId()
-                          << " PSN=" << recoveredFecHeader.GetPSN()
-                          << " sip=" << ch.sip << " dip=" << ch.dip
-                          << " l3Prot=0x" << std::hex << (int)ch.l3Prot << std::dec
-                          << " sport=" << ch.udp.sport << " dport=" << ch.udp.dport
-                          << " seq=" << ch.udp.seq << " pg=" << ch.udp.pg << std::endl;
-
                 // Process as normal received packet
                 if (m_node->GetNodeType() > 0)  // switch
                 {

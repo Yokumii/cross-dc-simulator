@@ -86,13 +86,6 @@ uint32_t SwitchNode::DoLbFlowECMP(Ptr<const Packet> p, const CustomHeader &ch,
         buf.u32[2] = ch.tcp.sport | ((uint32_t)ch.tcp.dport << 16);
     else if (ch.l3Prot == 0x11 || ch.l3Prot == 0xFB) {  // RDMA traffic on UDP or FEC repair
         buf.u32[2] = ch.udp.sport | ((uint32_t)ch.udp.dport << 16);
-        if (ch.l3Prot == 0xFB) {
-            // 调试输出：验证 FEC 包的 udp.sport/dport 已正确解析
-            std::cout << "[SW-FEC-HASH] FEC packet hashing: sip=" << ch.sip
-                      << " dip=" << ch.dip
-                      << " sport=" << ch.udp.sport
-                      << " dport=" << ch.udp.dport << std::endl;
-        }
     }
     else if (ch.l3Prot == 0xFC || ch.l3Prot == 0xFD)  // ACK or NACK
         buf.u32[2] = ch.ack.sport | ((uint32_t)ch.ack.dport << 16);

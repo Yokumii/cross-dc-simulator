@@ -72,9 +72,6 @@ FecEncoder::FecEncoder(uint32_t blockSize, uint32_t interleavingDepth)
       m_blockSize = MAX_BLOCK_SIZE;
     }
 
-  std::cout << "[FEC-ENCODER-INIT] Created encoder with blockSize=" << m_blockSize
-            << " interleavingDepth=" << m_interleavingDepth << std::endl;
-
   // Initialize coding layers
   m_codingLayers.resize(m_interleavingDepth);
 
