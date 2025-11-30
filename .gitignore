@@ -1,0 +1,8 @@
+*.tr
+results/*
+*.log
+.vscode/*
+**/*.pyc
+.vscode
+.cache/*
+__pycache__

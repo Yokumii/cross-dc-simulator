@@ -1,0 +1,21 @@
+# Topology to BDP mapping configuration file
+# Format: topology_name=bdp_value
+# Lines starting with # are comments and will be ignored
+
+# 2-tier topologies
+leaf_spine_128_100G_OS2=104000
+
+# 3-tier fat-tree topologies  
+fat_k4_100G_OS2=153000
+fat_k8_100G_OS2=156000
+
+# Cross-datacenter topologies
+cross_dc_k4_dc2_os2_ib100_il1000.0_eb400_el400000.0_ie0.0_ee0.0=10208250
+cross_dc_k4_dc2_os2_ib100_il1000.0_eb400_el400000.0_ie0.0_ee1e-05=10208250
+cross_dc_k4_dc2_os2_ib100_il1000.0_eb400_el400000.0_ie0.0_ee5e-05=10208250
+cross_dc_k4_dc2_os2_ib100_il1000.0_eb400_el400000.0_ie0.0_ee0.0001=10208250
+cross_dc_k4_dc2_os2_ib100_il1000.0_eb400_el400000.0_ie0.0_ee0.0005=10208250
+cross_dc_k4_dc2_os2_ib100_il1000.0_eb400_el400000.0_ie0.0_ee0.001=10208250
+cross_dc_k4_dc2_os2_ib100_il1000.0_eb400_el400000.0_ie0.0_ee0.005=10208250
+cross_dc_k4_dc2_os2_ib100_il1000.0_eb400_el400000.0_ie0.0_ee0.01=10208250
+cross_dc_k4_dc2_os2_ib100_il1000.0_eb400_el400000.0_ie0.0_ee0.05=10208250
