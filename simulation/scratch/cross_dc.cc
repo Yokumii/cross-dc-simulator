@@ -586,6 +586,19 @@ void on_rto_timeout(FILE *fout, uint32_t nodeId, Ptr<RdmaQueuePair> qp, Time rto
 void on_fec_debug(FILE *fout, uint32_t nodeId, uint32_t logType,
                   uint32_t param0, uint32_t param1, uint32_t param2, uint32_t param3) {
     if (!fout) return;
+
+    // data_recv 事件量极大，大规模压测时建议采样，避免日志与 IO 成为瓶颈。
+    // 这里只对 logType==0 做 1/256 采样，其他事件全量保留。
+    if (logType == 0)
+    {
+        static uint32_t s_data_sample = 0;
+        s_data_sample++;
+        if ((s_data_sample & 0xFFu) != 0)
+        {
+            return;
+        }
+    }
+
     fprintf(fout, "%lu %u %u %u %u %u %u\n",
             (unsigned long)Simulator::Now().GetNanoSeconds(),
             nodeId,

@@ -848,6 +848,10 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
         flow.txNextPsn = 0;
         flow.txHasBlockHeader = false;
         flow.rxBlockHeaders.clear();
+
+        // 大规模流量下五元组数量可能非常大；消息结束后该 flow 不再复用时，
+        // 直接回收条目可显著降低常驻内存，避免 OOM/SIGKILL。
+        m_fecFlows.erase(key);
     }
 }
 
@@ -1148,6 +1152,13 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
                 {
                     missing++;
                 }
+            }
+
+            // 消息尾块已经完整（全部 data 已到或已恢复）时回收该 flow 的解码状态，避免大规模场景内存常驻增长。
+            if (missing == 0)
+            {
+                m_fecFlows.erase(key);
+                return;
             }
 
             if (missing > 0)
