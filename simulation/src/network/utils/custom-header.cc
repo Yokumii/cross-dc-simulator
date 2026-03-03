@@ -92,7 +92,7 @@ uint32_t CustomHeader::GetSerializedSize (void) const{
 	if (headerType & L4_Header){
 		if (l3Prot == 0x6) // TCP
 			len += tcp.length * 4;
-		else if (l3Prot == 0x11 || l3Prot == 0xFB) // UDP or FEC repair (FEC reuses UDP format)
+		else if (l3Prot == 0x11 || l3Prot == 0xFB || l3Prot == 0xFA) // UDP or FEC repair/negotiation (FEC reuses UDP format)
 			len += GetUdpHeaderSize();
 		else if (l3Prot == 0xFC || l3Prot == 0xFD)
 			len += GetAckSerializedSize();
@@ -152,7 +152,7 @@ void CustomHeader::Serialize (Buffer::Iterator start) const{
 		  uint32_t optionLen = (tcp.length - 5) * 4;
 		  if (optionLen <= 32)
 			  i.Write(tcp.optionBuf, optionLen);
-	  }else if (l3Prot == 0x11 || l3Prot == 0xFB){ // UDP or FEC repair (FEC reuses UDP format)
+	  }else if (l3Prot == 0x11 || l3Prot == 0xFB || l3Prot == 0xFA){ // UDP or FEC repair/negotiation (FEC reuses UDP format)
 		  // udp header
 		  i.WriteHtonU16 (udp.sport);
 		  i.WriteHtonU16 (udp.dport);
@@ -279,7 +279,7 @@ CustomHeader::Deserialize (Buffer::Iterator start)
 			  i.Read(tcp.optionBuf, optionLen);
 		  }
 		  l4Size = tcp.length * 4;
-	  }else if (l3Prot == 0x11 || l3Prot == 0xFB){ // UDP + SeqTsHeader or FEC repair (FEC reuses UDP format)
+	  }else if (l3Prot == 0x11 || l3Prot == 0xFB || l3Prot == 0xFA){ // UDP + SeqTsHeader or FEC repair/negotiation (FEC reuses UDP format)
 		  i = start;
 		  i.Next(l2Size + l3Size);
 		  // udp header
@@ -345,4 +345,3 @@ uint32_t CustomHeader::GetStaticWholeHeaderSize(void){
 }
 
 } // namespace ns3
-
