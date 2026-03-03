@@ -41,6 +41,7 @@
 #include "ns3/error-model.h"
 #include "ns3/flow-id-num-tag.h"
 #include "ns3/flow-id-tag.h"
+#include "ns3/flow-stat-tag.h"
 #include "ns3/ipv4-header.h"
 #include "ns3/ipv4.h"
 #include "ns3/log.h"
@@ -734,6 +735,17 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     packet->PeekHeader(peekCh);
     FecFlowKey key{peekCh.sip, peekCh.dip, peekCh.udp.sport, peekCh.udp.dport};
 
+    // LoWAR：消息结束时也应结束本轮编码周期并 flush repair（避免尾块不受保护）
+    bool isMsgEnd = false;
+    {
+        FlowStatTag fst;
+        if (packet->PeekPacketTag(fst))
+        {
+            uint8_t t = fst.GetType();
+            isMsgEnd = (t == FlowStatTag::FLOW_END) || (t == FlowStatTag::FLOW_START_AND_END);
+        }
+    }
+
     FecFlowState& flow = m_fecFlows[key];
     if (!flow.encoder || !flow.decoder)
     {
@@ -827,6 +839,27 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
         flow.txHasBlockHeader = false;
 
         NS_LOG_DEBUG("Generated and sent " << repairPackets.size() << " repair packets");
+    }
+
+    // 尾块 flush：消息结束但编码块未满 r 时，仍生成 repair 包（LoWAR message-aware coding）
+    if (isMsgEnd)
+    {
+        if (flow.encoder->HasData())
+        {
+            std::vector<Ptr<Packet>> tailRepairs = flow.encoder->GenerateRepairPackets(true);
+            if (!tailRepairs.empty() && flow.txHasBlockHeader)
+            {
+                m_fecRepairPackets += tailRepairs.size();
+                SendRepairPackets(tailRepairs, flow.txBlockHeader);
+            }
+        }
+
+        // 下一条消息从 0 开始，避免跨消息编码/解码状态污染
+        flow.encoder = Ptr<FecEncoder>(new FecEncoder(m_fecBlockSize, m_fecInterleavingDepth));
+        flow.decoder = Ptr<FecDecoder>(new FecDecoder(m_fecBlockSize, m_fecInterleavingDepth));
+        flow.txNextPsn = 0;
+        flow.txHasBlockHeader = false;
+        flow.rxBlockHeaders.clear();
     }
 }
 

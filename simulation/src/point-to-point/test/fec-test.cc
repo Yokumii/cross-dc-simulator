@@ -226,7 +226,7 @@ FecEncoderTest::DoRun(void)
     NS_TEST_ASSERT_MSG_EQ(encoder->IsBlockComplete(), true, "Block should be complete");
 
     // Generate repair packets
-    std::vector<Ptr<Packet>> repairPackets = encoder->GenerateRepairPackets();
+    std::vector<Ptr<Packet>> repairPackets = encoder->GenerateRepairPackets(false);
 
     NS_TEST_ASSERT_MSG_EQ(repairPackets.size(), interleavingDepth, "Should generate c repair packets");
 
@@ -246,6 +246,51 @@ FecEncoderTest::DoRun(void)
     NS_TEST_ASSERT_MSG_EQ(encoder->IsBlockComplete(), false, "Block should not be complete after reset");
 
     NS_LOG_INFO("FEC Encoder test passed");
+}
+
+/**
+ * \brief FEC Encoder Tail Flush Test Case
+ *
+ * 验证 allowIncomplete=true 时可以对未满 r 的尾块生成 repair 包（与 LoWAR 的 message-aware flush 对齐）。
+ */
+class FecEncoderTailFlushTest : public TestCase
+{
+public:
+    FecEncoderTailFlushTest();
+    virtual ~FecEncoderTailFlushTest();
+
+private:
+    virtual void DoRun(void);
+};
+
+FecEncoderTailFlushTest::FecEncoderTailFlushTest()
+    : TestCase("FEC Encoder tail flush on incomplete block")
+{
+}
+
+FecEncoderTailFlushTest::~FecEncoderTailFlushTest()
+{
+}
+
+void
+FecEncoderTailFlushTest::DoRun(void)
+{
+    uint32_t blockSize = 8;
+    uint32_t interleavingDepth = 4;
+    Ptr<FecEncoder> encoder = Ptr<FecEncoder>(new FecEncoder(blockSize, interleavingDepth));
+
+    // Encode fewer than r packets
+    for (uint32_t i = 0; i < 3; i++)
+    {
+        Ptr<Packet> packet = Create<Packet>(100);
+        encoder->EncodePacket(packet, i);
+    }
+
+    NS_TEST_ASSERT_MSG_EQ(encoder->IsBlockComplete(), false, "Block should be incomplete");
+
+    std::vector<Ptr<Packet>> repairs = encoder->GenerateRepairPackets(true);
+    NS_TEST_ASSERT_MSG_NE(repairs.size(), 0, "Tail flush should generate at least 1 repair");
+    NS_TEST_ASSERT_MSG_EQ((repairs.size() <= interleavingDepth), true, "Repair count should be <= c");
 }
 
 /**
@@ -366,7 +411,7 @@ FecEndToEndTest::DoRun(void)
     NS_TEST_ASSERT_MSG_EQ(encoder->IsBlockComplete(), true, "Encoding block should be complete");
 
     // Generate repair packets
-    std::vector<Ptr<Packet>> repairPackets = encoder->GenerateRepairPackets();
+    std::vector<Ptr<Packet>> repairPackets = encoder->GenerateRepairPackets(false);
     NS_TEST_ASSERT_MSG_EQ(repairPackets.size(), interleavingDepth, "Should generate c repair packets");
 
     // Simulate reception with one packet loss
@@ -424,6 +469,7 @@ FecTestSuite::FecTestSuite()
     AddTestCase(new FecHeaderTest, TestCase::QUICK);
     AddTestCase(new FecXorEngineTest, TestCase::QUICK);
     AddTestCase(new FecEncoderTest, TestCase::QUICK);
+    AddTestCase(new FecEncoderTailFlushTest, TestCase::QUICK);
     AddTestCase(new FecDecoderTest, TestCase::QUICK);
     AddTestCase(new FecEndToEndTest, TestCase::QUICK);
 }

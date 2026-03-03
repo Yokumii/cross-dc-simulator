@@ -124,16 +124,20 @@ FecEncoder::IsBlockComplete() const
 }
 
 std::vector<Ptr<Packet>>
-FecEncoder::GenerateRepairPackets()
+FecEncoder::GenerateRepairPackets(bool allowIncomplete)
 {
-  NS_LOG_FUNCTION_NOARGS();
+  NS_LOG_FUNCTION(allowIncomplete);
 
   std::vector<Ptr<Packet>> repairPackets;
 
-  if (!IsBlockComplete())
+  if (!allowIncomplete && !IsBlockComplete())
     {
       NS_LOG_WARN("GenerateRepairPackets called on incomplete block ("
                   << m_packetsInBlock << "/" << m_blockSize << ")");
+      return repairPackets;
+    }
+  if (allowIncomplete && m_packetsInBlock == 0)
+    {
       return repairPackets;
     }
 

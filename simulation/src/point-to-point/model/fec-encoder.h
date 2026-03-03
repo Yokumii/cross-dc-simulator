@@ -91,11 +91,13 @@ public:
    * \brief 生成当前块的 repair 包
    *
    * 每个 coding unit 最多生成一个 repair 包。
-   * 仅在 IsBlockComplete() 为 true 时调用。
+   * 默认仅在 IsBlockComplete() 为 true 时调用；若 allowIncomplete=true，则用于“消息结束时的尾块 flush”，
+   * 会对当前已编码的数据包集合生成 repair 包（与 LoWAR 的 message-aware coding 对齐）。
    *
+   * \param allowIncomplete 是否允许对未满 r 的尾块生成 repair
    * \return 带 FEC 头部的 repair 包列表
    */
-  std::vector<Ptr<Packet>> GenerateRepairPackets();
+  std::vector<Ptr<Packet>> GenerateRepairPackets(bool allowIncomplete = false);
 
   /**
    * \brief Reset encoder state for next coding block
@@ -116,6 +118,11 @@ public:
    * \return Count of packets encoded in current block
    */
   uint32_t GetPacketsInBlock() const;
+
+  /**
+   * \brief 当前块是否已有数据包
+   */
+  bool HasData() const { return m_packetsInBlock > 0; }
 
 private:
   /**
