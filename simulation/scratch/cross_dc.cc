@@ -1095,12 +1095,12 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("PFC_OUTPUT_FILE") == 0) {
                 conf >> pfc_output_file;
                 std::cerr << "PFC_OUTPUT_FILE\t\t\t\t" << pfc_output_file << '\n';
-        } else if (key.compare("RTO_MON_FILE") == 0) {
-            conf >> rto_mon_file;
-            std::cerr << "RTO_MON_FILE\t\t\t\t" << rto_mon_file << '\n';
-        } else if (key.compare("FEC_MON_FILE") == 0) {
-            conf >> fec_mon_file;
-            std::cerr << "FEC_MON_FILE\t\t\t\t" << fec_mon_file << '\n';
+            } else if (key.compare("RTO_MON_FILE") == 0) {
+                conf >> rto_mon_file;
+                std::cerr << "RTO_MON_FILE\t\t\t\t" << rto_mon_file << '\n';
+            } else if (key.compare("FEC_MON_FILE") == 0) {
+                conf >> fec_mon_file;
+                std::cerr << "FEC_MON_FILE\t\t\t\t" << fec_mon_file << '\n';
             } else if (key.compare("LINK_DOWN") == 0) {
                 conf >> link_down_time >> link_down_A >> link_down_B;
                 std::cerr << "LINK_DOWN\t\t\t\t" << link_down_time << ' ' << link_down_A << ' '
@@ -1282,6 +1282,11 @@ int main(int argc, char *argv[]) {
     Settings::node_num = node_num;
     Settings::host_num = node_num - switch_num;
     Settings::switch_num = switch_num;
+    Settings::num_dc = dci_switch_ids.empty() ? 1 : static_cast<uint32_t>(dci_switch_ids.size());
+    Settings::servers_per_dc =
+        (Settings::num_dc > 0 && Settings::host_num % Settings::num_dc == 0)
+            ? (Settings::host_num / Settings::num_dc)
+            : 0;
     Settings::lb_mode = lb_mode;
     Settings::packet_payload = packet_payload_size;
     // Settings::MTU = packet_payload_size + 48;  // for simplicity
@@ -1323,13 +1328,6 @@ int main(int argc, char *argv[]) {
     //
     // Explicitly create the channels required by the topology.
     //
-    Ptr<RateErrorModel> rem = CreateObject<RateErrorModel>();
-    Ptr<UniformRandomVariable> uv = CreateObject<UniformRandomVariable>();
-    rem->SetRandomVariable(uv);
-    uv->SetStream(50);
-    rem->SetAttribute("ErrorRate", DoubleValue(error_rate_per_link));
-    rem->SetAttribute("ErrorUnit", StringValue("ERROR_UNIT_PACKET"));
-
     pfc_file = fopen(pfc_output_file.c_str(), "w");
     FILE* rto_output = fopen(rto_mon_file.c_str(), "w");
     FILE* fec_output = fopen(fec_mon_file.c_str(), "w");
@@ -1353,16 +1351,20 @@ int main(int argc, char *argv[]) {
         qbb.SetDeviceAttribute("DataRate", StringValue(data_rate));
         qbb.SetChannelAttribute("Delay", StringValue(link_delay));
 
-        if (error_rate > 0) {
-            Ptr<RateErrorModel> rem = CreateObject<RateErrorModel>();
-            Ptr<UniformRandomVariable> uv = CreateObject<UniformRandomVariable>();
-            rem->SetRandomVariable(uv);
-            uv->SetStream(50);
-            rem->SetAttribute("ErrorRate", DoubleValue(error_rate));
-            rem->SetAttribute("ErrorUnit", StringValue("ERROR_UNIT_PACKET"));
-            qbb.SetDeviceAttribute("ReceiveErrorModel", PointerValue(rem));
+        // per-link 丢包模型：优先使用拓扑文件中的 error_rate；否则使用全局兜底 error_rate_per_link
+        double link_error_rate = (error_rate > 0) ? error_rate : error_rate_per_link;
+        if (link_error_rate > 0) {
+            Ptr<RateErrorModel> perLinkRem = CreateObject<RateErrorModel>();
+            Ptr<UniformRandomVariable> perLinkUv = CreateObject<UniformRandomVariable>();
+            perLinkRem->SetRandomVariable(perLinkUv);
+            // 使用不同 stream 避免多链路共享同一随机序列导致相关性
+            perLinkUv->SetStream(1000 + i);
+            perLinkRem->SetAttribute("ErrorRate", DoubleValue(link_error_rate));
+            perLinkRem->SetAttribute("ErrorUnit", StringValue("ERROR_UNIT_PACKET"));
+            qbb.SetDeviceAttribute("ReceiveErrorModel", PointerValue(perLinkRem));
         } else {
-            qbb.SetDeviceAttribute("ReceiveErrorModel", PointerValue(rem));
+            // 必须显式清空，否则 QbbHelper 可能沿用上一次设置
+            qbb.SetDeviceAttribute("ReceiveErrorModel", PointerValue(0));
         }
 
         fflush(stdout);
@@ -1436,12 +1438,13 @@ int main(int argc, char *argv[]) {
     /* Get IP address <-> NodeID pairs */
     Ipv4Address empty_ip;
     for (uint32_t i = 0; i < node_num; ++i) {
-        if (n.Get(i)->GetNodeType() == 0) {  // is server
-            if (serverAddress[i].IsEqual(empty_ip)) {
-                printf("XXX ERROR %d\n", i);
-                printf("size of serverAddress: %lu", serverAddress.size());
-                NS_FATAL_ERROR("An end-host belongs to no link");
-            }
+        if (n.Get(i)->GetNodeType() != 0) {
+            continue;
+        }
+        if (i >= serverAddress.size() || serverAddress[i].IsEqual(empty_ip)) {
+            printf("XXX ERROR %d\n", i);
+            printf("size of serverAddress: %lu", serverAddress.size());
+            NS_FATAL_ERROR("An end-host belongs to no link");
         }
         Settings::hostId2IpMap[i] = serverAddress[i].Get();
         Settings::hostIp2IdMap[serverAddress[i].Get()] = i;

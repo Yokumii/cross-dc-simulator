@@ -127,9 +127,9 @@ mkdir -p "${RUN_DIR}"
 TOPO_PARTS=(
     "cross_dc_k${K_FAT}_dc${NUM_DC}_os2"
     "ib${INTRA_BW}"
-    "il0.0001"  # intra latency is fixed at 0.0001ms for edge CNP
+    "il1000.0"  # intra latency fixed at 1000ns (1us)；需与生成器文件名保持一致
     "eb${INTER_BW}"
-    "el0.04"    # inter latency is fixed at 0.04ms for edge CNP
+    "el400000.0"  # inter latency fixed at 400000ns (400us)；需与生成器文件名保持一致
 )
 
 # Add error rates if they are greater than 0
@@ -147,7 +147,7 @@ if [ -f "$TOPO_FILE" ]; then
     echo "Topology file $TOPO_FILE already exists, skipping generation."
 else
     echo "Generating topology file $TOPO_FILE..."
-        (cd "$SIM_DIR" && python3 ../tools/topology_gen/cross_dc_topology_gen.py $K_FAT 2 $NUM_DC $INTRA_BW 0.0001 $INTER_BW 0.04 $INTRA_ERROR $INTER_ERROR)
+        (cd "$SIM_DIR" && python3 ../tools/topology_gen/cross_dc_topology_gen.py $K_FAT 2 $NUM_DC $INTRA_BW 1000 $INTER_BW 400000 $INTRA_ERROR $INTER_ERROR)
     if [ $? -eq 0 ]; then
         echo "Topology file generated successfully."
     else

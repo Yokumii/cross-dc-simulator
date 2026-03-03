@@ -36,6 +36,7 @@
 #include <ns3/rdma.h>
 #include "fec-encoder.h"
 #include "fec-decoder.h"
+#include <unordered_map>
 
 namespace ns3 {
 
@@ -199,18 +200,55 @@ public:
   // FEC transmission and reception methods
   void FecTransmit(Ptr<Packet> packet);
   void FecReceive(Ptr<Packet> packet, const CustomHeader& ch);  // Added CustomHeader parameter
-  void SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets);
+  void SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets, const CustomHeader& baseHeader);
 
   bool m_fecEnabled;                    ///< Whether FEC is enabled
   uint32_t m_fecBlockSize;              ///< FEC block size (r parameter)
   uint32_t m_fecInterleavingDepth;      ///< FEC interleaving depth (c parameter)
 
-  Ptr<FecEncoder> m_fecEncoder;         ///< FEC encoder for this device
-  Ptr<FecDecoder> m_fecDecoder;         ///< FEC decoder for this device
+  struct FecFlowKey
+  {
+    uint32_t sip;
+    uint32_t dip;
+    uint16_t sport;
+    uint16_t dport;
 
-  uint32_t m_txSeqNum;                  ///< Transmit sequence number for FEC
-  CustomHeader m_currentBlockHeader;    ///< CustomHeader from first packet of current FEC block (TX)
-  CustomHeader m_receivedBlockHeader;   ///< CustomHeader from first packet of received FEC block (RX)
+    bool operator==(const FecFlowKey& o) const
+    {
+      return sip == o.sip && dip == o.dip && sport == o.sport && dport == o.dport;
+    }
+  };
+
+  struct FecFlowKeyHash
+  {
+    std::size_t operator()(const FecFlowKey& k) const
+    {
+      // 32-bit sip/dip + 16-bit ports; use simple mixing to keep deterministic.
+      std::size_t h = 1469598103934665603ull;
+      auto mix = [&](uint64_t v) {
+        h ^= static_cast<std::size_t>(v);
+        h *= 1099511628211ull;
+      };
+      mix(k.sip);
+      mix(k.dip);
+      mix((static_cast<uint32_t>(k.sport) << 16) | k.dport);
+      return h;
+    }
+  };
+
+  struct FecFlowState
+  {
+    uint32_t txNextPsn = 0;
+    bool txHasBlockHeader = false;
+    CustomHeader txBlockHeader;  // CustomHeader from first packet of current FEC block (TX)
+
+    Ptr<FecEncoder> encoder;
+    Ptr<FecDecoder> decoder;
+
+    std::unordered_map<uint32_t, CustomHeader> rxBlockHeaders;  // basePSN -> CustomHeader（用于恢复包重建）
+  };
+
+  std::unordered_map<FecFlowKey, FecFlowState, FecFlowKeyHash> m_fecFlows;
 
   // FEC statistics
   uint32_t m_fecEncodedPackets;         ///< Number of data packets encoded

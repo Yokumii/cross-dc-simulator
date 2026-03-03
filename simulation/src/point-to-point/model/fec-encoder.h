@@ -69,13 +69,12 @@ public:
   ~FecEncoder();
 
   /**
-   * \brief Encode a data packet into the current coding block
+   * \brief 将数据包编码到当前编码块
    *
-   * Adds the packet to all interleaving layers according to LoWAR algorithm.
-   * Each layer uses different interleaving index to provide burst tolerance.
+   * 每个数据包只选择一个 coding unit 进行 XOR 更新。
    *
-   * \param dataPacket The data packet to encode
-   * \param psn Packet sequence number
+   * \param dataPacket 待编码的数据包
+   * \param psn 包序号
    */
   void EncodePacket(Ptr<Packet> dataPacket, uint32_t psn);
 
@@ -89,14 +88,12 @@ public:
   bool IsBlockComplete() const;
 
   /**
-   * \brief Generate repair packets for the current block
+   * \brief 生成当前块的 repair 包
    *
-   * Creates c repair packets using layered interleaving. Each repair packet
-   * is the XOR of packets from its layer's buckets.
+   * 每个 coding unit 最多生成一个 repair 包。
+   * 仅在 IsBlockComplete() 为 true 时调用。
    *
-   * Must be called only when IsBlockComplete() returns true.
-   *
-   * \return Vector of repair packets with FEC headers
+   * \return 带 FEC 头部的 repair 包列表
    */
   std::vector<Ptr<Packet>> GenerateRepairPackets();
 
@@ -122,9 +119,9 @@ public:
 
 private:
   /**
-   * \brief Coding unit for one interleaving layer bucket
+   * \brief 编码单元
    *
-   * Stores the XOR accumulation for packets in this bucket.
+   * 保存该单元的 XOR 累加结果与 recipe。
    */
   struct CodingUnit
   {
@@ -142,42 +139,16 @@ private:
    */
   void AddPacketToCodingUnit(CodingUnit& unit, Ptr<Packet> packet, uint32_t psn);
 
-  /**
-   * \brief Calculate bucket index for a packet in a layer
-   *
-   * Uses LoWAR interleaving formula: bucket = (psn / i^layer) % bucketsPerLayer
-   * where i is the interleaving index (typically 2).
-   *
-   * \param psn Packet sequence number (relative to block base)
-   * \param layer Interleaving layer index (0 to c-1)
-   * \return Bucket index within the layer
-   */
-  uint32_t GetBucketIndex(uint32_t psn, uint32_t layer) const;
-
-  /**
-   * \brief Get number of buckets per layer
-   *
-   * Calculated as: ceil(r / i^layer)
-   *
-   * \param layer Interleaving layer index
-   * \return Number of buckets in this layer
-   */
-  uint32_t GetBucketsPerLayer(uint32_t layer) const;
-
   uint32_t m_blockSize;             ///< r: Coding block size
   uint32_t m_interleavingDepth;     ///< c: Number of interleaving layers
-  uint32_t m_interleavingIndex;     ///< i: Interleaving index (default 2)
 
   uint32_t m_currentBlockBase;      ///< bPSN: Base PSN of current block
   uint32_t m_packetsInBlock;        ///< Number of packets in current block
 
   /**
-   * \brief Coding units organized by [layer][bucket]
-   *
-   * Each layer has multiple buckets, each bucket accumulates XOR of
-   * packets assigned to it by the interleaving algorithm.
+   * \brief coding units 列表，数量等于 interleaving depth
    */
-  std::vector<std::vector<CodingUnit>> m_codingLayers;
+  std::vector<CodingUnit> m_units;
 
   /**
    * \brief Map from PSN to packet for current block

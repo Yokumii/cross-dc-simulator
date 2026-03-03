@@ -19,7 +19,8 @@ from topo_bdp import get_bdp
 from datetime import date
 
 # randomID
-random.seed(datetime.now())
+# Python 3.12+ 的 random.seed 不再接受 datetime 对象，使用时间戳整数保证兼容性
+random.seed(int(datetime.now().timestamp() * 1e6))
 MAX_RAND_RANGE = 1000000000
 
 # config template
@@ -187,6 +188,11 @@ def main():
                       type=int, default=64, help="FEC block size r (default: 64)")
     parser.add_argument('--fec-interleaving-depth', dest='fec_interleaving_depth', action='store',
                       type=int, default=8, help="FEC interleaving depth c (default: 8)")
+    parser.add_argument('--dry-run', dest='dry_run', action='store_true',
+                      help="Only generate topology/traffic/config then exit (no waf run / analysis)")
+    parser.add_argument('--minimal-flows', dest='minimal_flows', action='store',
+                      type=int, default=0,
+                      help="Generate a tiny flow file with N flows (skips traffic generators). Useful for tests.")
 
     args = parser.parse_args()
 
@@ -218,7 +224,15 @@ def main():
     # generate topology file
     print("Generating topology...")
     # Generate detailed topology filename with parameters (used for BDP mapping key as well)
-    topo_detailed = f"cross_dc_k{args.k_fat}_dc{args.num_dc}_os2_ib{args.intra_bw}_il{args.intra_latency}_eb{args.inter_bw}_el{args.inter_latency}_ie{args.intra_error}_ee{args.inter_error}"
+    # 统一浮点格式，避免 1000 与 1000.0 在文件名/BDP key 上不一致
+    intra_lat_str = str(float(args.intra_latency))
+    inter_lat_str = str(float(args.inter_latency))
+    topo_detailed = (
+        f"cross_dc_k{args.k_fat}_dc{args.num_dc}_os2_"
+        f"ib{args.intra_bw}_il{intra_lat_str}_"
+        f"eb{args.inter_bw}_el{inter_lat_str}_"
+        f"ie{args.intra_error}_ee{args.inter_error}"
+    )
     topo_file = f"config/{topo_detailed}.txt"
     
     if not os.path.exists(topo_file):
@@ -232,29 +246,28 @@ def main():
     # Simple topology name (for traffic/trace filenames)
     topo_simple = f"cross_dc_k{args.k_fat}_dc{args.num_dc}_os2"
 
-    # get DCI switch IDs from topology file
+    # 计算 DCI switch IDs（避免从拓扑文件“最后一行”误解析）
+    # 注意：跨 DC 拓扑生成器按每个 DC 固定追加 1 个 DCI switch。
+    oversubscript = 2
+    n_core = int(args.k_fat / 2 * args.k_fat / 2)
+    n_pod = args.k_fat
+    n_agg_per_pod = int(args.k_fat / 2)
+    n_tor_per_pod = int(args.k_fat / 2)
+    n_server_per_tor = int(args.k_fat / 2 * oversubscript)
+    n_server_per_pod = n_server_per_tor * n_tor_per_pod
+    n_server_per_dc = n_server_per_pod * n_pod
+    n_tor_per_dc = n_tor_per_pod * n_pod
+    n_agg_per_dc = n_agg_per_pod * n_pod
+    n_core_per_dc = n_core
+    n_switch_per_dc = n_tor_per_dc + n_agg_per_dc + n_core_per_dc
+    n_dci_per_dc = 1
+
     dci_switch_ids = []
-    
-    if os.path.exists(topo_file):
-        # read the last line, get DCI switch IDs
-        with open(topo_file, 'r') as f:
-            lines = f.readlines()
-            if lines:  # ensure the file is not empty
-                last_line = lines[-1].strip()
-                parts = last_line.split()
-                if len(parts) >= 2:
-                    dci_switch_ids.append(int(parts[0]))  # the DCI switch ID of the first DC
-                    dci_switch_ids.append(int(parts[1]))  # the DCI switch ID of the second DC
-                    print(f"Found DCI switch IDs from topology file: {dci_switch_ids}")
-                else:
-                    print("Warning: Could not parse DCI switch IDs from topology file")
-            else:
-                print("Warning: Topology file is empty")
-    
-    # if cannot get DCI switch IDs from topology file, use default values
-    if not dci_switch_ids and args.num_dc == 2:
-        dci_switch_ids = [52, 105]  # for k=4, num_dc=2, the DCI switch IDs are 52 and 105
-        print(f"Using default DCI switch IDs: {dci_switch_ids}")
+    for dc_id in range(args.num_dc):
+        dc_offset = dc_id * (n_server_per_dc + n_switch_per_dc + n_dci_per_dc)
+        dci_switch_id = dc_offset + n_server_per_dc + n_switch_per_dc
+        dci_switch_ids.append(dci_switch_id)
+    print(f"Computed DCI switch IDs: {dci_switch_ids}")
 
     # Sanity checks
     if (args.cc == "timely" or args.cc == "hpcc") and args.lb == "conweave":
@@ -273,16 +286,63 @@ def main():
     flow_file = f"{topo_simple}_{flow_suffix}_flow.txt"
     flow_path = f"config/{flow_file}"
     
-    if not os.path.exists(flow_path):
-        # traffic_gen moved to tools/traffic_gen at repo root; simulation/ is one level deeper
-        gen_root = "../tools/traffic_gen"
-        if args.traffic_type == "mixed":
-            os.system(f"python3 {gen_root}/cross_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --inter-load {args.inter_load} --intra-bw {args.intra_bw} --inter-bw {args.inter_bw} -t {args.simul_time} -c {gen_root}/AliStorage2019.txt -o {flow_path} --flow-scale {args.flow_scale}")
-        else:  # intra_only
-            os.system(f"python3 {gen_root}/intra_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --intra-bw {args.intra_bw} -t {args.simul_time} -c {gen_root}/AliStorage2019.txt -o {flow_path} --flow-scale {args.flow_scale}")
-        print(f"Traffic file generated: {flow_path}")
+    if args.minimal_flows > 0:
+        # 生成最小可用流量文件（用于测试/冒烟检查），避免生成大量流
+        print(f"Generating minimal traffic file with {args.minimal_flows} flows: {flow_path}")
+
+        oversubscript = 2
+        n_core = int(args.k_fat / 2 * args.k_fat / 2)
+        n_pod = args.k_fat
+        n_agg_per_pod = int(args.k_fat / 2)
+        n_tor_per_pod = int(args.k_fat / 2)
+        n_server_per_tor = int(args.k_fat / 2 * oversubscript)
+        n_server_per_pod = n_server_per_tor * n_tor_per_pod
+        n_server_per_dc = n_server_per_pod * n_pod
+        n_tor_per_dc = n_tor_per_pod * n_pod
+        n_agg_per_dc = n_agg_per_pod * n_pod
+        n_core_per_dc = n_core
+        n_switch_per_dc = n_tor_per_dc + n_agg_per_dc + n_core_per_dc
+        n_dci_per_dc = 1
+
+        def server_id(dc_id: int, server_idx: int) -> int:
+            dc_offset = dc_id * (n_server_per_dc + n_switch_per_dc + n_dci_per_dc)
+            return dc_offset + server_idx
+
+        n_flow = int(args.minimal_flows)
+        t0 = FLOWGEN_DEFAULT_TIME
+        dt = 1e-6
+        with open(flow_path, "w") as f:
+            f.write(f"{n_flow}\n")
+            for i in range(n_flow):
+                pg = 3
+                size = 1000
+                t = t0 + i * dt
+
+                if args.traffic_type == "mixed" and (i % 2 == 1) and args.num_dc >= 2:
+                    # inter-DC
+                    src_dc = 0
+                    dst_dc = 1
+                    src = server_id(src_dc, i % n_server_per_dc)
+                    dst = server_id(dst_dc, (i + 1) % n_server_per_dc)
+                else:
+                    # intra-DC（若 intra_only，则全部走这里）
+                    dc = 0
+                    src = server_id(dc, i % n_server_per_dc)
+                    dst = server_id(dc, (i + 1) % n_server_per_dc)
+
+                f.write(f"{src} {dst} {pg} {size} {t:.9f}\n")
+        print(f"Minimal traffic file generated: {flow_path}")
     else:
-        print(f"Using existing traffic file: {flow_path}")
+        if not os.path.exists(flow_path):
+            # traffic_gen moved to tools/traffic_gen at repo root; simulation/ is one level deeper
+            gen_root = "../tools/traffic_gen"
+            if args.traffic_type == "mixed":
+                os.system(f"python3 {gen_root}/cross_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --inter-load {args.inter_load} --intra-bw {args.intra_bw} --inter-bw {args.inter_bw} -t {args.simul_time} -c {gen_root}/AliStorage2019.txt -o {flow_path} --flow-scale {args.flow_scale}")
+            else:  # intra_only
+                os.system(f"python3 {gen_root}/intra_dc_traffic_gen.py -k {args.k_fat} -d {args.num_dc} --intra-load {args.intra_load} --intra-bw {args.intra_bw} -t {args.simul_time} -c {gen_root}/AliStorage2019.txt -o {flow_path} --flow-scale {args.flow_scale}")
+            print(f"Traffic file generated: {flow_path}")
+        else:
+            print(f"Using existing traffic file: {flow_path}")
 
     # config file path
     config_name = os.getcwd() + "/mix/output/" + config_ID + "/config.txt"
@@ -336,13 +396,17 @@ def main():
             time=args.simul_time,
         ))
 
-    # Lookup BDP via shared topo2bdp utility using detailed name; no Python-side computation
-    bdp_val = get_bdp(topo)
-    if bdp_val is None:
-        print(f"ERROR - BDP not found for topology: {topo}. Please add it to tools/topo2bdp/topo_bdp.txt")
-        return
-    bdp = int(bdp_val)
-    print("1BDP = {}".format(bdp))
+    # dry-run 只需要验证“文件/配置是否正确生成”，不应阻塞在 BDP 映射表上
+    if args.dry_run:
+        bdp = 0
+    else:
+        # Lookup BDP via shared topo2bdp utility using detailed name; no Python-side computation
+        bdp_val = get_bdp(topo)
+        if bdp_val is None:
+            print(f"ERROR - BDP not found for topology: {topo}. Please add it to tools/topo2bdp/topo_bdp.txt")
+            return
+        bdp = int(bdp_val)
+        print("1BDP = {}".format(bdp))
 
     # DCQCN parameters
     kmax_map = "6 %d %d %d %d %d %d %d %d %d %d %d %d" % (
@@ -415,7 +479,9 @@ def main():
             cwh_path_pause_time=cwh_path_pause_time,
             cwh_extra_voq_flush_time=cwh_extra_voq_flush_time,
             cwh_default_voq_waiting_time=cwh_default_voq_waiting_time,
-            error_rate_per_link=args.inter_error,
+            # 全局链路错误率仅作为“拓扑未显式指定 error_rate 时”的兜底；
+            # 跨 DC 场景的 intra/inter 错误率应由 topology file 的 per-link 字段决定。
+            error_rate_per_link=0.0,
             fec_enabled=args.fec_enabled,
             fec_block_size=args.fec_block_size,
             fec_interleaving_depth=args.fec_interleaving_depth
@@ -426,6 +492,13 @@ def main():
 
     with open(config_name, "w") as file:
         file.write(config)
+
+    if args.dry_run:
+        print("Dry-run enabled. Generated artifacts:")
+        print(f"- Topology: {topo_file}")
+        print(f"- Traffic:  {flow_path}")
+        print(f"- Config:   {config_name}")
+        return
 
     # run simulation
     print("Running simulation...")

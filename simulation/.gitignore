@@ -7,6 +7,7 @@ build/*
 analyze/raw_basic/*
 mix/output/*
 mix/*_flow.txt
+mix/.history
 config/*_flow.txt
 analysis/figures/*.pdf
 analysis/figures/*.png

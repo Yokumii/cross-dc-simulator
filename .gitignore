@@ -6,3 +6,4 @@ results/*
 .vscode
 .cache/*
 __pycache__
+scripts/tests/

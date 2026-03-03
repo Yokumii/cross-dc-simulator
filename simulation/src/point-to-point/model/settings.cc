@@ -19,6 +19,8 @@ std::map<uint32_t, uint32_t> Settings::hostId2IpMap;
 uint32_t Settings::node_num = 0;
 uint32_t Settings::host_num = 0;
 uint32_t Settings::switch_num = 0;
+uint32_t Settings::num_dc = 1;
+uint32_t Settings::servers_per_dc = 0;
 uint64_t Settings::cnt_finished_flows = 0;
 uint32_t Settings::packet_payload = 1000;
 

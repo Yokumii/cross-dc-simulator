@@ -128,6 +128,9 @@ class Settings {
     static uint32_t node_num;
     static uint32_t host_num;
     static uint32_t switch_num;
+    // cross-DC 拓扑信息（用于在交换机侧判定跨 DC 流）
+    static uint32_t num_dc;
+    static uint32_t servers_per_dc;
     static uint64_t cnt_finished_flows;  // number of finished flows (in qp_finish())
 
     /* The map between hosts' IP and ID, initial when build topology */
