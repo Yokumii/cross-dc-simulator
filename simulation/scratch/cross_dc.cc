@@ -591,7 +591,14 @@ void on_fec_debug(FILE *fout, uint32_t nodeId, uint32_t logType,
             nodeId,
             logType,
             param0, param1, param2, param3);
-    fflush(fout);
+    // 大规模场景下按行 fflush 会产生极高 IO 开销，可能触发超时/被杀（SIGKILL）。
+    // 这里做轻量节流：每 4096 行再 flush 一次，必要时你也可以手动在退出前 fflush。
+    static uint32_t s_fec_log_lines = 0;
+    s_fec_log_lines++;
+    if ((s_fec_log_lines & 0xFFFu) == 0)
+    {
+        fflush(fout);
+    }
 }
 
 /**
