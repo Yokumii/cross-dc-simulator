@@ -31,6 +31,9 @@ namespace ns3 {
  * - Interleaving Depth c (1 byte): Number of repair layers
  * - Base PSN (4 bytes): Starting sequence number of coding block
  * - ISN (2 bytes): Interleaving Sequence Number (for repair packets)
+ * - Edge Flags (1 byte): bit0=hasFirst, bit1=hasLast (repair only)
+ * - Last Rel (2 bytes): last packet index within block (repair only)
+ * - Last Length (2 bytes): byte length of last packet ([FecHeader][Payload]) (repair only)
  * - Recipe Length (2 bytes): Number of PSNs in recipe (repair only)
  * - Recipe PSNs (4 bytes each): Packet sequence numbers (repair only)
  */
@@ -99,6 +102,14 @@ public:
    */
   void SetRecipe(const std::vector<uint32_t>& recipe);
 
+  /**
+   * \brief Set edge metadata (repair packets only)
+   */
+  void SetHasFirst(bool hasFirst);
+  void SetHasLast(bool hasLast);
+  void SetLastRel(uint16_t lastRel);
+  void SetLastLength(uint16_t lastLength);
+
   // Getters
   /**
    * \brief Get packet type
@@ -148,6 +159,11 @@ public:
    */
   uint16_t GetRecipeLength() const;
 
+  bool GetHasFirst() const;
+  bool GetHasLast() const;
+  uint16_t GetLastRel() const;
+  uint16_t GetLastLength() const;
+
   // NS3 Header interface
   static TypeId GetTypeId(void);
   virtual TypeId GetInstanceTypeId(void) const;
@@ -169,6 +185,9 @@ private:
   uint32_t m_basePSN;          ///< Base PSN of coding block
   uint32_t m_psn;              ///< Packet sequence number (for data packets)
   uint16_t m_isn;              ///< Interleaving sequence number (for repair packets)
+  uint8_t m_edgeFlags;         ///< Edge flags (repair packets only)
+  uint16_t m_lastRel;          ///< Last packet index within this block (repair packets only)
+  uint16_t m_lastLength;       ///< Byte length of last packet ([FecHeader][Payload]) (repair only)
   std::vector<uint32_t> m_recipe; ///< Recipe list (for repair packets)
 };
 

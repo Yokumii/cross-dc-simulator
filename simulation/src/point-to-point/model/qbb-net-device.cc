@@ -805,6 +805,14 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     flow.encoder->EncodePacket(encodingPacket, psn);
     m_fecEncodedPackets++;
 
+    // 记录“消息尾包”的边界信息，供 repair header 携带并在解码时做尾包裁剪
+    if (isMsgEnd)
+    {
+        uint16_t lastRel = static_cast<uint16_t>(psn - basePSN);
+        uint16_t lastLen = static_cast<uint16_t>(encodingPacket->GetSize());
+        flow.encoder->MarkHasLast(lastRel, lastLen);
+    }
+
     NS_LOG_DEBUG("FEC encoded packet PSN=" << psn << " (block " << basePSN << ")"
                  << " encoded_size=" << encodingPacket->GetSize());
 
@@ -983,7 +991,11 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
         Ptr<Packet> repairPayload = packet->Copy();
         repairPayload->RemoveHeader(fecHeader);
 
-        flow.decoder->ReceiveRepairPacket(repairPayload, basePSN, isn, recipe);
+        flow.decoder->ReceiveRepairPacket(repairPayload, basePSN, isn, recipe,
+                                          fecHeader.GetHasFirst(),
+                                          fecHeader.GetHasLast(),
+                                          fecHeader.GetLastRel(),
+                                          fecHeader.GetLastLength());
 
         NS_LOG_DEBUG("FEC stored repair packet in decoder buffer");
 

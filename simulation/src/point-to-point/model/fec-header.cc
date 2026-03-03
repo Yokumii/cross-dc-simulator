@@ -22,7 +22,10 @@ FecHeader::FecHeader()
     m_interleavingDepth(0),
     m_basePSN(0),
     m_psn(0),
-    m_isn(0)
+    m_isn(0),
+    m_edgeFlags(0),
+    m_lastRel(0),
+    m_lastLength(0)
 {
 }
 
@@ -70,6 +73,32 @@ void
 FecHeader::SetRecipe(const std::vector<uint32_t>& recipe)
 {
   m_recipe = recipe;
+}
+
+void
+FecHeader::SetHasFirst(bool hasFirst)
+{
+  if (hasFirst) m_edgeFlags |= 0x01;
+  else m_edgeFlags &= static_cast<uint8_t>(~0x01);
+}
+
+void
+FecHeader::SetHasLast(bool hasLast)
+{
+  if (hasLast) m_edgeFlags |= 0x02;
+  else m_edgeFlags &= static_cast<uint8_t>(~0x02);
+}
+
+void
+FecHeader::SetLastRel(uint16_t lastRel)
+{
+  m_lastRel = lastRel;
+}
+
+void
+FecHeader::SetLastLength(uint16_t lastLength)
+{
+  m_lastLength = lastLength;
 }
 
 FecHeader::FecPacketType
@@ -120,6 +149,30 @@ FecHeader::GetRecipeLength() const
   return static_cast<uint16_t>(m_recipe.size());
 }
 
+bool
+FecHeader::GetHasFirst() const
+{
+  return (m_edgeFlags & 0x01) != 0;
+}
+
+bool
+FecHeader::GetHasLast() const
+{
+  return (m_edgeFlags & 0x02) != 0;
+}
+
+uint16_t
+FecHeader::GetLastRel() const
+{
+  return m_lastRel;
+}
+
+uint16_t
+FecHeader::GetLastLength() const
+{
+  return m_lastLength;
+}
+
 TypeId
 FecHeader::GetTypeId(void)
 {
@@ -152,6 +205,13 @@ FecHeader::Print(std::ostream &os) const
   else
     {
       os << "ISN=" << m_isn << " ";
+      os << "HasFirst=" << (GetHasFirst() ? 1 : 0) << " ";
+      os << "HasLast=" << (GetHasLast() ? 1 : 0) << " ";
+      if (GetHasLast())
+        {
+          os << "LastRel=" << m_lastRel << " ";
+          os << "LastLen=" << m_lastLength << " ";
+        }
       os << "RecipeLen=" << m_recipe.size() << " ";
       os << "Recipe=[";
       for (size_t i = 0; i < m_recipe.size(); ++i)
@@ -176,8 +236,8 @@ FecHeader::GetSerializedSize(void) const
     }
   else
     {
-      // Repair packet: + ISN(2) + recipeLen(2) + recipe(4 * len)
-      size += 2 + 2 + 4 * m_recipe.size();
+      // Repair packet: + ISN(2) + edgeFlags(1) + lastRel(2) + lastLen(2) + recipeLen(2) + recipe(4 * len)
+      size += 2 + 1 + 2 + 2 + 2 + 4 * m_recipe.size();
     }
 
   return size;
@@ -203,6 +263,9 @@ FecHeader::Serialize(Buffer::Iterator start) const
     {
       // Write repair packet fields
       i.WriteHtonU16(m_isn);
+      i.WriteU8(m_edgeFlags);
+      i.WriteHtonU16(m_lastRel);
+      i.WriteHtonU16(m_lastLength);
       i.WriteHtonU16(static_cast<uint16_t>(m_recipe.size()));
 
       // Write recipe PSNs
@@ -234,6 +297,9 @@ FecHeader::Deserialize(Buffer::Iterator start)
     {
       // Read repair packet fields
       m_isn = i.ReadNtohU16();
+      m_edgeFlags = i.ReadU8();
+      m_lastRel = i.ReadNtohU16();
+      m_lastLength = i.ReadNtohU16();
       uint16_t recipeLen = i.ReadNtohU16();
 
       // Read recipe PSNs

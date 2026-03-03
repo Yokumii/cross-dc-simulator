@@ -124,6 +124,14 @@ public:
    */
   bool HasData() const { return m_packetsInBlock > 0; }
 
+  /**
+   * \brief 标记当前编码块包含消息尾包（用于 repair header edge metadata）
+   *
+   * \param lastRel 尾包在块内的相对序号（0..r-1）
+   * \param lastLength 尾包长度（[FecHeader][Payload] 的字节数）
+   */
+  void MarkHasLast(uint16_t lastRel, uint16_t lastLength);
+
 private:
   /**
    * \brief 编码单元
@@ -145,6 +153,11 @@ private:
    * \param psn Packet sequence number
    */
   void AddPacketToCodingUnit(CodingUnit& unit, Ptr<Packet> packet, uint32_t psn);
+
+  bool m_hasFirst;
+  bool m_hasLast;
+  uint16_t m_lastRel;
+  uint16_t m_lastLength;
 
   uint32_t m_blockSize;             ///< r: Coding block size
   uint32_t m_interleavingDepth;     ///< c: Number of interleaving layers

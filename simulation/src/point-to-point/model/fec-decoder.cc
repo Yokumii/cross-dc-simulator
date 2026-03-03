@@ -108,9 +108,13 @@ void
 FecDecoder::ReceiveRepairPacket(Ptr<Packet> repairPacket,
                                 uint32_t basePSN,
                                 uint16_t isn,
-                                const std::vector<uint32_t>& recipe)
+                                const std::vector<uint32_t>& recipe,
+                                bool hasFirst,
+                                bool hasLast,
+                                uint16_t lastRel,
+                                uint16_t lastLength)
 {
-  NS_LOG_FUNCTION(basePSN << isn << recipe.size());
+  NS_LOG_FUNCTION(basePSN << isn << recipe.size() << hasLast << lastRel << lastLength);
 
   if (repairPacket == 0)
     {
@@ -148,6 +152,10 @@ FecDecoder::ReceiveRepairPacket(Ptr<Packet> repairPacket,
   info.basePSN = basePSN;
   info.isn = isn;
   info.recipe = recipe;
+  info.hasFirst = hasFirst;
+  info.hasLast = hasLast;
+  info.lastRel = lastRel;
+  info.lastLength = lastLength;
   info.used = false;
 
   m_repairBuffer.push_back(info);
@@ -361,6 +369,22 @@ FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
     {
       NS_LOG_ERROR("XOR recovery failed for PSN=" << missingPsn);
       return 0;
+    }
+
+  // Edge trimming: 若丢失的是消息尾包且尾包长度小于修复得到的 maxLen，则裁剪到准确长度
+  if (repairInfo.hasLast)
+    {
+      uint32_t basePSN = repairInfo.basePSN;
+      uint32_t rel = missingPsn - basePSN;
+      if (rel == repairInfo.lastRel)
+        {
+          uint32_t cur = recoveredPacket->GetSize();
+          uint32_t want = repairInfo.lastLength;
+          if (want > 0 && cur > want)
+            {
+              recoveredPacket->RemoveAtEnd(cur - want);
+            }
+        }
     }
 
   // Store recovered packet in reordering buffer

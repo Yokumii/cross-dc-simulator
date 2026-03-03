@@ -81,6 +81,10 @@ FecHeaderTest::DoRun(void)
     repairHeader.SetInterleavingDepth(8);
     repairHeader.SetBasePSN(0);
     repairHeader.SetISN(3);
+    repairHeader.SetHasFirst(true);
+    repairHeader.SetHasLast(true);
+    repairHeader.SetLastRel(7);
+    repairHeader.SetLastLength(1234);
 
     std::vector<uint32_t> recipe;
     recipe.push_back(0);
@@ -96,6 +100,10 @@ FecHeaderTest::DoRun(void)
 
     NS_TEST_ASSERT_MSG_EQ(receivedRepairHeader.GetType(), FecHeader::FEC_REPAIR, "REPAIR type mismatch");
     NS_TEST_ASSERT_MSG_EQ(receivedRepairHeader.GetISN(), 3, "ISN mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedRepairHeader.GetHasFirst(), true, "HasFirst mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedRepairHeader.GetHasLast(), true, "HasLast mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedRepairHeader.GetLastRel(), 7, "LastRel mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedRepairHeader.GetLastLength(), 1234, "LastLength mismatch");
 
     std::vector<uint32_t> receivedRecipe = receivedRepairHeader.GetRecipe();
     NS_TEST_ASSERT_MSG_EQ(receivedRecipe.size(), 3, "Recipe size mismatch");
@@ -350,7 +358,7 @@ FecDecoderTest::DoRun(void)
     }
 
     Ptr<Packet> repairPayload = Create<Packet>(100);
-    decoder->ReceiveRepairPacket(repairPayload, 0, 0, recipe);
+    decoder->ReceiveRepairPacket(repairPayload, 0, 0, recipe, false, false, 0, 0);
 
     // Attempt recovery
     std::vector<Ptr<Packet>> recoveredPackets = decoder->RecoverLostPackets();
@@ -359,6 +367,58 @@ FecDecoderTest::DoRun(void)
     NS_TEST_ASSERT_MSG_EQ(recoveredPackets.size(), 1, "Should recover 1 packet");
 
     NS_LOG_INFO("FEC Decoder test passed");
+}
+
+/**
+ * \brief FEC Decoder Edge Trim Test Case
+ *
+ * 验证当丢失的是消息尾包且尾包长度小于修复得到的 maxLen 时，会按 repair header 的 LastLength 裁剪。
+ */
+class FecDecoderEdgeTrimTest : public TestCase
+{
+public:
+    FecDecoderEdgeTrimTest();
+    virtual ~FecDecoderEdgeTrimTest();
+
+private:
+    virtual void DoRun(void);
+};
+
+FecDecoderEdgeTrimTest::FecDecoderEdgeTrimTest()
+    : TestCase("FEC Decoder trims recovered tail packet length")
+{
+}
+
+FecDecoderEdgeTrimTest::~FecDecoderEdgeTrimTest()
+{
+}
+
+void
+FecDecoderEdgeTrimTest::DoRun(void)
+{
+    uint32_t blockSize = 4;
+    uint32_t interleavingDepth = 1;
+    Ptr<FecDecoder> decoder = Ptr<FecDecoder>(new FecDecoder(blockSize, interleavingDepth));
+
+    Ptr<Packet> p0 = Create<Packet>(100);
+    Ptr<Packet> p1 = Create<Packet>(100);
+    Ptr<Packet> p2 = Create<Packet>(100);
+    Ptr<Packet> p3 = Create<Packet>(50);  // tail shorter
+
+    decoder->ReceiveDataPacket(p0, 0);
+    decoder->ReceiveDataPacket(p1, 1);
+    decoder->ReceiveDataPacket(p2, 2);
+
+    std::vector<Ptr<Packet>> orig{p0, p1, p2, p3};
+    Ptr<Packet> repair = FecXorEngine::XorPackets(orig);
+
+    std::vector<uint32_t> recipe{0, 1, 2, 3};
+
+    decoder->ReceiveRepairPacket(repair, 0, 0, recipe, true, true, 3, 50);
+
+    std::vector<Ptr<Packet>> recovered = decoder->RecoverLostPackets();
+    NS_TEST_ASSERT_MSG_EQ(recovered.size(), 1, "Should recover 1 packet");
+    NS_TEST_ASSERT_MSG_EQ(recovered[0]->GetSize(), 50, "Recovered tail packet should be trimmed to 50 bytes");
 }
 
 /**
@@ -438,7 +498,9 @@ FecEndToEndTest::DoRun(void)
         Ptr<Packet> payload = repairPackets[i]->Copy();
         payload->RemoveHeader(header);
 
-        decoder->ReceiveRepairPacket(payload, header.GetBasePSN(), header.GetISN(), header.GetRecipe());
+        decoder->ReceiveRepairPacket(payload, header.GetBasePSN(), header.GetISN(), header.GetRecipe(),
+                                     header.GetHasFirst(), header.GetHasLast(),
+                                     header.GetLastRel(), header.GetLastLength());
 
         // Try recovery after each repair packet
         std::vector<Ptr<Packet>> recovered = decoder->RecoverLostPackets();
@@ -471,6 +533,7 @@ FecTestSuite::FecTestSuite()
     AddTestCase(new FecEncoderTest, TestCase::QUICK);
     AddTestCase(new FecEncoderTailFlushTest, TestCase::QUICK);
     AddTestCase(new FecDecoderTest, TestCase::QUICK);
+    AddTestCase(new FecDecoderEdgeTrimTest, TestCase::QUICK);
     AddTestCase(new FecEndToEndTest, TestCase::QUICK);
 }
 

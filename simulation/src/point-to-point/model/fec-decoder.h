@@ -93,7 +93,11 @@ public:
   void ReceiveRepairPacket(Ptr<Packet> repairPacket,
                            uint32_t basePSN,
                            uint16_t isn,
-                           const std::vector<uint32_t>& recipe);
+                           const std::vector<uint32_t>& recipe,
+                           bool hasFirst,
+                           bool hasLast,
+                           uint16_t lastRel,
+                           uint16_t lastLength);
 
   /**
    * \brief Attempt to recover missing packets
@@ -154,6 +158,10 @@ private:
     uint32_t basePSN;             ///< Base PSN of coding block
     uint16_t isn;                 ///< Interleaving sequence number
     std::vector<uint32_t> recipe; ///< PSNs XORed in this repair
+    bool hasFirst;                ///< Whether this block contains message first packet
+    bool hasLast;                 ///< Whether this block contains message last packet
+    uint16_t lastRel;             ///< Relative index of message last packet within block
+    uint16_t lastLength;          ///< Byte length of message last packet ([FecHeader][Payload])
     bool used;                    ///< Whether this repair was used for recovery
   };
 

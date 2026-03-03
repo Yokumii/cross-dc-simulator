@@ -36,7 +36,11 @@ FecEncoder::FecEncoder()
   : m_blockSize(64),
     m_interleavingDepth(8),
     m_currentBlockBase(0),
-    m_packetsInBlock(0)
+    m_packetsInBlock(0),
+    m_hasFirst(false),
+    m_hasLast(false),
+    m_lastRel(0),
+    m_lastLength(0)
 {
   NS_LOG_FUNCTION_NOARGS();
 
@@ -48,7 +52,11 @@ FecEncoder::FecEncoder(uint32_t blockSize, uint32_t interleavingDepth)
   : m_blockSize(blockSize),
     m_interleavingDepth(interleavingDepth),
     m_currentBlockBase(0),
-    m_packetsInBlock(0)
+    m_packetsInBlock(0),
+    m_hasFirst(false),
+    m_hasLast(false),
+    m_lastRel(0),
+    m_lastLength(0)
 {
   NS_LOG_FUNCTION(blockSize << interleavingDepth);
 
@@ -85,6 +93,11 @@ FecEncoder::EncodePacket(Ptr<Packet> dataPacket, uint32_t psn)
   if (m_packetsInBlock == 0)
     {
       m_currentBlockBase = psn;
+      // 在本实现里每条消息的 PSN 从 0 开始，因此 bPSN==0 的块包含消息首包
+      m_hasFirst = (psn == 0);
+      m_hasLast = false;
+      m_lastRel = 0;
+      m_lastLength = 0;
       NS_LOG_DEBUG("Starting new coding block at bPSN=" << m_currentBlockBase);
     }
 
@@ -165,6 +178,10 @@ FecEncoder::GenerateRepairPackets(bool allowIncomplete)
       fecHdr.SetInterleavingDepth(m_interleavingDepth);
       fecHdr.SetBasePSN(m_currentBlockBase);
       fecHdr.SetISN(isn);
+      fecHdr.SetHasFirst(m_hasFirst);
+      fecHdr.SetHasLast(m_hasLast);
+      fecHdr.SetLastRel(m_lastRel);
+      fecHdr.SetLastLength(m_lastLength);
       fecHdr.SetRecipe(unit.recipe);
 
       repairPacket->AddHeader(fecHdr);
@@ -191,6 +208,10 @@ FecEncoder::ResetBlock()
   // Advance to next block
   m_currentBlockBase += m_blockSize;
   m_packetsInBlock = 0;
+  m_hasFirst = false;
+  m_hasLast = false;
+  m_lastRel = 0;
+  m_lastLength = 0;
 
   // Clear block packets
   m_blockPackets.clear();
@@ -205,6 +226,14 @@ FecEncoder::ResetBlock()
     }
 
   NS_LOG_DEBUG("Reset complete, new bPSN=" << m_currentBlockBase);
+}
+
+void
+FecEncoder::MarkHasLast(uint16_t lastRel, uint16_t lastLength)
+{
+  m_hasLast = true;
+  m_lastRel = lastRel;
+  m_lastLength = lastLength;
 }
 
 uint32_t
