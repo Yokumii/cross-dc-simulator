@@ -566,8 +566,22 @@ void on_rto_timeout(FILE *fout, uint32_t nodeId, Ptr<RdmaQueuePair> qp, Time rto
 
 /**
  * @brief FEC debug logging - detailed decode operations
- * log_type: 0=data_recv, 1=repair_recv, 2=recovery_attempt, 3=recovery_result
- * Format: time_ns node_id log_type psn/isn param1 param2 param3
+ * Format: time_ns node_id log_type param0 param1 param2 param3
+ *
+ * 基础事件（兼容老解析）：
+ * - 0=data_recv:        param0=psn, param1=basePSN, param2=flowHash, param3=pack(r,c)
+ * - 1=repair_recv:      param0=isn, param1=basePSN, param2=recipe_size, param3=flowHash
+ * - 2=recovery_attempt: param0=isn, param1=basePSN, param2=flowHash, param3=0
+ * - 3=recovery_result:  param0=isn, param1=recovered_cnt, param2=flowHash, param3=basePSN
+ *
+ * 扩展事件（LoWAR 对齐）：
+ * - 4=tail_flush:       param0=flowHash, param1=basePSN, param2=tail_data_cnt, param3=repair_cnt
+ * - 20=negotiate_req:   param0=flowHash, param1=pack(cur_r,cur_c), param2=pack(new_r,new_c), param3=missing_cnt
+ * - 21=negotiate_recv:  param0=flowHash, param1=pack(new_r,new_c), param2=neg_op(0=req,1=ack), param3=0
+ * - 22=negotiate_apply: param0=flowHash, param1=pack(old_r,old_c), param2=pack(new_r,new_c), param3=0
+ * - 23=param_switch_rx: param0=flowHash, param1=pack(old_r,old_c), param2=pack(new_r,new_c), param3=0(data)/1(repair)
+ *
+ * pack(r,c) := (r & 0xFFFF) | ((c & 0xFFFF) << 16)
  */
 void on_fec_debug(FILE *fout, uint32_t nodeId, uint32_t logType,
                   uint32_t param0, uint32_t param1, uint32_t param2, uint32_t param3) {
