@@ -201,6 +201,7 @@ public:
   void FecTransmit(Ptr<Packet> packet);
   void FecReceive(Ptr<Packet> packet, const CustomHeader& ch);  // Added CustomHeader parameter
   void SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets, const CustomHeader& baseHeader);
+  void SendNegotiatePacket(const CustomHeader& rxCh, uint32_t newR, uint32_t newC, uint16_t negOp);
 
   bool m_fecEnabled;                    ///< Whether FEC is enabled
   uint32_t m_fecBlockSize;              ///< FEC block size (r parameter)
@@ -238,6 +239,11 @@ public:
 
   struct FecFlowState
   {
+    uint32_t cfgBlockSize = 0;
+    uint32_t cfgInterleavingDepth = 0;
+    uint32_t pendingBlockSize = 0;
+    uint32_t pendingInterleavingDepth = 0;
+    bool hasPendingCfg = false;
     uint32_t txNextPsn = 0;
     bool txHasBlockHeader = false;
     CustomHeader txBlockHeader;  // CustomHeader from first packet of current FEC block (TX)
@@ -246,6 +252,8 @@ public:
     Ptr<FecDecoder> decoder;
 
     std::unordered_map<uint32_t, CustomHeader> rxBlockHeaders;  // basePSN -> CustomHeader（用于恢复包重建）
+
+    uint64_t lastNegotiateSentNs = 0;
   };
 
   std::unordered_map<FecFlowKey, FecFlowState, FecFlowKeyHash> m_fecFlows;

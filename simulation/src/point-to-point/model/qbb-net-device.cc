@@ -25,8 +25,10 @@
 #include "fec-encoder.h"
 #include "fec-decoder.h"
 
+#include <algorithm>
 #include <stdint.h>
 #include <stdio.h>
+#include <utility>
 
 #include <iostream>
 #include <unordered_map>
@@ -387,6 +389,15 @@ void QbbNetDevice::Receive(Ptr<Packet> packet) {
     // Check for FEC packets if FEC enabled (only at receiving endpoints)
     if (m_fecEnabled && m_node->GetNodeType() == 0)
     {
+        if (ch.l3Prot == 0xFA)  // FEC negotiation packet
+        {
+            Ptr<Packet> fecPacket = packet->Copy();
+            CustomHeader tempCh(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+            fecPacket->RemoveHeader(tempCh);
+
+            FecReceive(fecPacket, tempCh);
+            return;
+        }
         if (ch.l3Prot == 0xFB)  // FEC repair packet (use 0xFB, as 0xFD is used by NACK)
         {
             // Remove CustomHeader to access FecHeader
@@ -749,15 +760,31 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     FecFlowState& flow = m_fecFlows[key];
     if (!flow.encoder || !flow.decoder)
     {
-        flow.encoder = Ptr<FecEncoder>(new FecEncoder(m_fecBlockSize, m_fecInterleavingDepth));
-        flow.decoder = Ptr<FecDecoder>(new FecDecoder(m_fecBlockSize, m_fecInterleavingDepth));
+        flow.cfgBlockSize = m_fecBlockSize;
+        flow.cfgInterleavingDepth = m_fecInterleavingDepth;
+        flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
+        flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
         flow.txNextPsn = 0;
         flow.txHasBlockHeader = false;
         flow.rxBlockHeaders.clear();
     }
 
+    // LoWAR 参数协商：把协商得到的新 (r,c) 延迟到“下一条消息开始”（txNextPsn==0）再生效，
+    // 避免中途切参导致编码/解码不一致。
+    if (flow.txNextPsn == 0 && flow.hasPendingCfg)
+    {
+        flow.cfgBlockSize = flow.pendingBlockSize;
+        flow.cfgInterleavingDepth = flow.pendingInterleavingDepth;
+        flow.hasPendingCfg = false;
+
+        flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
+        flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
+        flow.txHasBlockHeader = false;
+        flow.rxBlockHeaders.clear();
+    }
+
     uint32_t psn = flow.txNextPsn;
-    uint32_t basePSN = (psn / m_fecBlockSize) * m_fecBlockSize;
+    uint32_t basePSN = (psn / flow.cfgBlockSize) * flow.cfgBlockSize;
 
     // If this is the first packet of a new block, save its CustomHeader for repair packets
     if (psn == basePSN)
@@ -773,8 +800,8 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     // Packet structure becomes: [CustomHeader][FecHeader][Payload]
     FecHeader fecHeader;
     fecHeader.SetType(FecHeader::FEC_DATA);
-    fecHeader.SetBlockSize(m_fecBlockSize);
-    fecHeader.SetInterleavingDepth(m_fecInterleavingDepth);
+    fecHeader.SetBlockSize(flow.cfgBlockSize);
+    fecHeader.SetInterleavingDepth(flow.cfgInterleavingDepth);
     fecHeader.SetPSN(psn);
     fecHeader.SetBasePSN(basePSN);
 
@@ -826,7 +853,7 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
                   << ", generating repair packets");
 
         // Generate repair packets
-        std::vector<Ptr<Packet>> repairPackets = flow.encoder->GenerateRepairPackets();
+        std::vector<Ptr<Packet>> repairPackets = flow.encoder->GenerateRepairPackets(false);
         m_fecRepairPackets += repairPackets.size();
 
         NS_LOG_INFO("FEC: Generated " << repairPackets.size() << " repair packets");
@@ -863,8 +890,8 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
         }
 
         // 下一条消息从 0 开始，避免跨消息编码/解码状态污染
-        flow.encoder = Ptr<FecEncoder>(new FecEncoder(m_fecBlockSize, m_fecInterleavingDepth));
-        flow.decoder = Ptr<FecDecoder>(new FecDecoder(m_fecBlockSize, m_fecInterleavingDepth));
+        flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
+        flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
         flow.txNextPsn = 0;
         flow.txHasBlockHeader = false;
         flow.rxBlockHeaders.clear();
@@ -882,30 +909,71 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
         return;
     }
 
+    // Parse FEC header
+    FecHeader fecHeader;
+    packet->PeekHeader(fecHeader);
+
+    if (fecHeader.GetType() == FecHeader::FEC_NEGOTIATE)
+    {
+        // Negotiation packet: update per-flow FEC parameters for future messages.
+        // Note: negotiation packet's CustomHeader is reversed (sip/dip swapped) for routing.
+        uint32_t newR = fecHeader.GetBlockSize();
+        uint32_t newC = fecHeader.GetInterleavingDepth();
+
+        // Map reversed direction back to the data-flow key
+        FecFlowKey dataKey{ch.dip, ch.sip, ch.udp.dport, ch.udp.sport};
+        FecFlowState& f = m_fecFlows[dataKey];
+
+        // 只记录“下一条消息”的参数；实际生效由发送侧在 txNextPsn==0 时应用。
+        f.pendingBlockSize = newR;
+        f.pendingInterleavingDepth = newC;
+        f.hasPendingCfg = true;
+        return;
+    }
+
     // Per-flow decoder keyed by (sip,dip,sport,dport) to avoid cross-flow coding/decoding.
     FecFlowKey key{ch.sip, ch.dip, ch.udp.sport, ch.udp.dport};
     FecFlowState& flow = m_fecFlows[key];
     if (!flow.decoder)
     {
-        flow.encoder = Ptr<FecEncoder>(new FecEncoder(m_fecBlockSize, m_fecInterleavingDepth));
-        flow.decoder = Ptr<FecDecoder>(new FecDecoder(m_fecBlockSize, m_fecInterleavingDepth));
+        flow.cfgBlockSize = fecHeader.GetBlockSize();
+        flow.cfgInterleavingDepth = fecHeader.GetInterleavingDepth();
+        if (flow.cfgBlockSize == 0) flow.cfgBlockSize = m_fecBlockSize;
+        if (flow.cfgInterleavingDepth == 0) flow.cfgInterleavingDepth = m_fecInterleavingDepth;
+        flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
+        flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
         flow.txNextPsn = 0;
         flow.txHasBlockHeader = false;
         flow.rxBlockHeaders.clear();
     }
 
-    // Parse FEC header
-    FecHeader fecHeader;
-    packet->PeekHeader(fecHeader);
-
     if (fecHeader.GetType() == FecHeader::FEC_DATA)
     {
         // Data packet - store in decoder
         uint32_t psn = fecHeader.GetPSN();
+
+        // 若对端切换了 (r,c)，约定会在“下一条消息”从 psn=0 重新开始；
+        // 因此在 psn==0 且参数变化时重置解码器，避免跨消息状态污染。
+        if (psn == 0 &&
+            (fecHeader.GetBlockSize() != flow.cfgBlockSize ||
+             fecHeader.GetInterleavingDepth() != flow.cfgInterleavingDepth))
+        {
+            flow.cfgBlockSize = fecHeader.GetBlockSize();
+            flow.cfgInterleavingDepth = fecHeader.GetInterleavingDepth();
+            if (flow.cfgBlockSize == 0) flow.cfgBlockSize = m_fecBlockSize;
+            if (flow.cfgInterleavingDepth == 0) flow.cfgInterleavingDepth = m_fecInterleavingDepth;
+
+            flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
+            flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
+            flow.txNextPsn = 0;
+            flow.txHasBlockHeader = false;
+            flow.rxBlockHeaders.clear();
+        }
+
         flow.decoder->ReceiveDataPacket(packet->Copy(), psn);
 
 	        // Save CustomHeader from first packet of the block (for recovery)
-	        uint32_t basePSN = (psn / m_fecBlockSize) * m_fecBlockSize;
+	        uint32_t basePSN = (psn / flow.cfgBlockSize) * flow.cfgBlockSize;
 	        if (psn == basePSN)
 	        {
 	            flow.rxBlockHeaders[basePSN] = ch;
@@ -961,6 +1029,24 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
         uint32_t basePSN = fecHeader.GetBasePSN();
         uint16_t isn = fecHeader.GetISN();
         std::vector<uint32_t> recipe = fecHeader.GetRecipe();
+
+        // Repair 可能先于 data 到达；若对端切换了 (r,c)，通常会从 basePSN=0 开启新消息。
+        // 因此在 basePSN==0 且参数变化时重置解码器，避免不同参数的 repair/data 混用。
+        if (basePSN == 0 &&
+            (fecHeader.GetBlockSize() != flow.cfgBlockSize ||
+             fecHeader.GetInterleavingDepth() != flow.cfgInterleavingDepth))
+        {
+            flow.cfgBlockSize = fecHeader.GetBlockSize();
+            flow.cfgInterleavingDepth = fecHeader.GetInterleavingDepth();
+            if (flow.cfgBlockSize == 0) flow.cfgBlockSize = m_fecBlockSize;
+            if (flow.cfgInterleavingDepth == 0) flow.cfgInterleavingDepth = m_fecInterleavingDepth;
+
+            flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
+            flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
+            flow.txNextPsn = 0;
+            flow.txHasBlockHeader = false;
+            flow.rxBlockHeaders.clear();
+        }
 
         // 即便块内首个 data 包丢失，也要能用 repair 包携带的五元组信息重建回放头部。
         // 注意：回放到上层的 recovered 包应按“数据包”处理，因此强制 l3Prot=0x11。
@@ -1056,7 +1142,44 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
             NS_LOG_INFO("FEC Node " << m_node->GetId() << " successfully recovered "
                                     << totalRecovered << " packets using repair ISN=" << isn);
         }
-	    }
+
+        // LoWAR：当“包含消息尾包”的编码块在 flush 后仍存在未恢复的丢包时，触发一次最小协商请求（提高冗余）
+        if (fecHeader.GetHasLast())
+        {
+            uint32_t missing = 0;
+            uint32_t lastRel = fecHeader.GetLastRel();
+            for (uint32_t rel = 0; rel <= lastRel; ++rel)
+            {
+                uint32_t psn = basePSN + rel;
+                if (flow.decoder->GetPacket(psn) == 0)
+                {
+                    missing++;
+                }
+            }
+
+            if (missing > 0)
+            {
+                uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+                if (nowNs - flow.lastNegotiateSentNs > 1000000ull) // 1ms 冷却
+                {
+                    uint32_t curR = flow.cfgBlockSize;
+                    uint32_t curC = flow.cfgInterleavingDepth;
+                    uint32_t newR = curR;
+                    uint32_t newC = curC < 16 ? (curC + 1) : curC;
+                    if (newC == curC && curR > 4)
+                    {
+                        newR = std::max<uint32_t>(4, curR / 2);
+                    }
+
+                    if (newR != curR || newC != curC)
+                    {
+                        SendNegotiatePacket(ch, newR, newC, 0 /*request*/);
+                        flow.lastNegotiateSentNs = nowNs;
+                    }
+                }
+            }
+        }
+    }
 }
 
 void
@@ -1115,6 +1238,46 @@ QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets, c
     }
 
     // Trigger transmission
+    DequeueAndTransmit();
+}
+
+void
+QbbNetDevice::SendNegotiatePacket(const CustomHeader& rxCh, uint32_t newR, uint32_t newC, uint16_t negOp)
+{
+    Ptr<Packet> p = Create<Packet>(0);
+
+    FecHeader fh;
+    fh.SetType(FecHeader::FEC_NEGOTIATE);
+    fh.SetBlockSize(static_cast<uint16_t>(newR));
+    fh.SetInterleavingDepth(static_cast<uint8_t>(newC));
+    fh.SetBasePSN(0);
+    fh.SetISN(negOp);
+    fh.SetHasFirst(false);
+    fh.SetHasLast(false);
+    fh.SetLastRel(0);
+    fh.SetLastLength(0);
+    std::vector<uint32_t> empty;
+    fh.SetRecipe(empty);
+    p->AddHeader(fh);
+
+    // Reverse direction for routing back to the sender
+    CustomHeader ch = rxCh;
+    std::swap(ch.sip, ch.dip);
+    std::swap(ch.udp.sport, ch.udp.dport);
+    ch.l3Prot = 0xFA;
+
+    p->AddHeader(ch);
+
+    if (m_node->GetNodeType() == 0)
+    {
+        m_rdmaEQ->EnqueueHighPrioQ(p);
+        m_traceEnqueue(p, 0);
+    }
+    else
+    {
+        SwitchSend(0, p, ch);
+    }
+
     DequeueAndTransmit();
 }
 

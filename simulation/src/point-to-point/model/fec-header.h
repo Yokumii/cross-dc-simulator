@@ -46,7 +46,8 @@ public:
    */
   enum FecPacketType {
     FEC_DATA = 0,    ///< Data packet (original packet with FEC metadata)
-    FEC_REPAIR = 1   ///< Repair packet (XOR of multiple data packets)
+    FEC_REPAIR = 1,  ///< Repair packet (XOR of multiple data packets)
+    FEC_NEGOTIATE = 2 ///< Negotiation packet (parameter sync/request)
   };
 
   /**

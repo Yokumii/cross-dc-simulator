@@ -193,7 +193,10 @@ void
 FecHeader::Print(std::ostream &os) const
 {
   os << "FecHeader: ";
-  os << "Type=" << (m_type == FEC_DATA ? "DATA" : "REPAIR") << " ";
+  if (m_type == FEC_DATA) os << "Type=DATA ";
+  else if (m_type == FEC_REPAIR) os << "Type=REPAIR ";
+  else if (m_type == FEC_NEGOTIATE) os << "Type=NEGOTIATE ";
+  else os << "Type=" << static_cast<uint32_t>(m_type) << " ";
   os << "BlockSize=" << m_blockSize << " ";
   os << "InterleavingDepth=" << static_cast<uint32_t>(m_interleavingDepth) << " ";
   os << "BasePSN=" << m_basePSN << " ";
@@ -202,7 +205,7 @@ FecHeader::Print(std::ostream &os) const
     {
       os << "PSN=" << m_psn;
     }
-  else
+  else if (m_type == FEC_REPAIR)
     {
       os << "ISN=" << m_isn << " ";
       os << "HasFirst=" << (GetHasFirst() ? 1 : 0) << " ";
@@ -221,6 +224,11 @@ FecHeader::Print(std::ostream &os) const
         }
       os << "]";
     }
+  else
+    {
+      // negotiation: reuse ISN as op-code (0=request,1=ack)
+      os << "NegOp=" << m_isn;
+    }
 }
 
 uint32_t
@@ -236,7 +244,8 @@ FecHeader::GetSerializedSize(void) const
     }
   else
     {
-      // Repair packet: + ISN(2) + edgeFlags(1) + lastRel(2) + lastLen(2) + recipeLen(2) + recipe(4 * len)
+      // Repair/Negotiate: + ISN(2) + edgeFlags(1) + lastRel(2) + lastLen(2) + recipeLen(2) + recipe(4 * len)
+      // For NEGOTIATE, recipeLen is 0 and recipe is empty.
       size += 2 + 1 + 2 + 2 + 2 + 4 * m_recipe.size();
     }
 
@@ -261,7 +270,7 @@ FecHeader::Serialize(Buffer::Iterator start) const
     }
   else
     {
-      // Write repair packet fields
+      // Write repair/negotiate packet fields
       i.WriteHtonU16(m_isn);
       i.WriteU8(m_edgeFlags);
       i.WriteHtonU16(m_lastRel);
@@ -295,7 +304,7 @@ FecHeader::Deserialize(Buffer::Iterator start)
     }
   else
     {
-      // Read repair packet fields
+      // Read repair/negotiate packet fields
       m_isn = i.ReadNtohU16();
       m_edgeFlags = i.ReadU8();
       m_lastRel = i.ReadNtohU16();

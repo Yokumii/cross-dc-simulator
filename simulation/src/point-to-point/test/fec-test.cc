@@ -111,6 +111,31 @@ FecHeaderTest::DoRun(void)
     NS_TEST_ASSERT_MSG_EQ(receivedRecipe[1], 8, "Recipe[1] mismatch");
     NS_TEST_ASSERT_MSG_EQ(receivedRecipe[2], 16, "Recipe[2] mismatch");
 
+    // Test NEGOTIATE packet header (no recipe)
+    FecHeader negHeader;
+    negHeader.SetType(FecHeader::FEC_NEGOTIATE);
+    negHeader.SetBlockSize(32);
+    negHeader.SetInterleavingDepth(5);
+    negHeader.SetBasePSN(0);
+    negHeader.SetISN(0); // NegOp: 0=request, 1=ack
+    negHeader.SetHasFirst(false);
+    negHeader.SetHasLast(false);
+    negHeader.SetLastRel(0);
+    negHeader.SetLastLength(0);
+    negHeader.SetRecipe(std::vector<uint32_t>());
+
+    Ptr<Packet> negPacket = Create<Packet>(0);
+    negPacket->AddHeader(negHeader);
+
+    FecHeader receivedNegHeader;
+    negPacket->RemoveHeader(receivedNegHeader);
+
+    NS_TEST_ASSERT_MSG_EQ(receivedNegHeader.GetType(), FecHeader::FEC_NEGOTIATE, "NEGOTIATE type mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedNegHeader.GetBlockSize(), 32, "NEGOTIATE block size mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedNegHeader.GetInterleavingDepth(), 5, "NEGOTIATE interleaving depth mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedNegHeader.GetISN(), 0, "NEGOTIATE op mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedNegHeader.GetRecipe().size(), 0, "NEGOTIATE recipe should be empty");
+
     NS_LOG_INFO("FEC Header test passed");
 }
 
