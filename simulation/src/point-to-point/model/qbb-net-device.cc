@@ -241,13 +241,11 @@ QbbNetDevice::QbbNetDevice() {
     m_fecEnabled = false;
     m_fecBlockSize = 64;  // Default LoWAR(64, 8)
     m_fecInterleavingDepth = 8;
-    m_txSeqNum = 0;
     m_fecEncodedPackets = 0;
     m_fecRepairPackets = 0;
     m_fecRecoveredPackets = 0;
     m_fecUnrecoverablePackets = 0;
-    m_fecEncoder = 0;
-    m_fecDecoder = 0;
+    m_fecFlows.clear();
 }
 
 QbbNetDevice::~QbbNetDevice() { NS_LOG_FUNCTION(this); }
@@ -418,26 +416,73 @@ void QbbNetDevice::Receive(Ptr<Packet> packet) {
             fecPacket->PeekHeader(fecHeader);
             uint32_t psn = fecHeader.GetPSN();
 
-            // Store data packet in FEC decoder
-            m_fecDecoder->ReceiveDataPacket(fecPacket, psn);
-
-            // Save CustomHeader from first packet of the block (for recovery)
-            uint32_t basePSN = (psn / m_fecBlockSize) * m_fecBlockSize;
-            if (psn == basePSN)
+            // Store data packet in per-flow FEC decoder
+            FecFlowKey key{tempCh.sip, tempCh.dip, tempCh.udp.sport, tempCh.udp.dport};
+            FecFlowState& flow = m_fecFlows[key];
+            if (!flow.decoder)
             {
-                m_receivedBlockHeader = tempCh;
-                NS_LOG_DEBUG("FEC RX: Saved CustomHeader from first packet of block " << basePSN
-                          << " sip=" << m_receivedBlockHeader.sip << " dip=" << m_receivedBlockHeader.dip);
+                flow.encoder = Ptr<FecEncoder>(new FecEncoder(m_fecBlockSize, m_fecInterleavingDepth));
+                flow.decoder = Ptr<FecDecoder>(new FecDecoder(m_fecBlockSize, m_fecInterleavingDepth));
+                flow.txNextPsn = 0;
+                flow.txHasBlockHeader = false;
+                flow.rxBlockHeaders.clear();
             }
+
+            flow.decoder->ReceiveDataPacket(fecPacket, psn);
+
+	            // Save CustomHeader from first packet of the block (for recovery)
+	            uint32_t basePSN = (psn / m_fecBlockSize) * m_fecBlockSize;
+	            if (psn == basePSN)
+	            {
+	                flow.rxBlockHeaders[basePSN] = tempCh;
+	                NS_LOG_DEBUG("FEC RX: Saved CustomHeader from first packet of block " << basePSN
+	                          << " sip=" << tempCh.sip << " dip=" << tempCh.dip);
+	            }
 
             // Log data packet reception for debugging
             NS_LOG_DEBUG("FEC Node " << m_node->GetId() << " received DATA packet: PSN=" << psn
                          << " basePSN=" << basePSN << " blockSize=" << m_fecBlockSize);
             
             // Debug callback: log_type=0 (data_recv), param0=psn, param1=basePSN
-            if (!m_fecDebugCallback.IsNull()) {
-                m_fecDebugCallback(m_node->GetId(), 0, psn, basePSN, 0, 0);
-            }
+	            if (!m_fecDebugCallback.IsNull()) {
+	                m_fecDebugCallback(m_node->GetId(), 0, psn, basePSN, 0, 0);
+	            }
+
+	            // 在数据包到达时也尝试恢复（覆盖“repair 先到、数据后到”的时序）
+	            while (true) {
+	                std::vector<Ptr<Packet>> recoveredPackets = flow.decoder->RecoverLostPackets();
+	                if (recoveredPackets.empty()) {
+	                    break;
+	                }
+	                m_fecRecoveredPackets += recoveredPackets.size();
+
+	                for (auto recoveredPkt : recoveredPackets) {
+	                    FecHeader recoveredFecHeader;
+	                    recoveredPkt->PeekHeader(recoveredFecHeader);
+	                    uint32_t recoveredBase = recoveredFecHeader.GetBasePSN();
+
+	                    auto itHdr = flow.rxBlockHeaders.find(recoveredBase);
+	                    if (itHdr == flow.rxBlockHeaders.end()) {
+	                        continue;
+	                    }
+	                    CustomHeader outCh = itHdr->second;
+	                    outCh.getInt = 1;
+                        outCh.l3Prot = 0x11;
+
+	                    recoveredPkt->RemoveHeader(recoveredFecHeader);
+	                    recoveredPkt->AddHeader(outCh);
+
+	                    if (m_node->GetNodeType() > 0)  // switch
+	                    {
+	                        recoveredPkt->AddPacketTag(FlowIdTag(m_ifIndex));
+	                        m_node->SwitchReceiveFromDevice(this, recoveredPkt, outCh);
+	                    }
+	                    else  // NIC
+	                    {
+	                        m_rdmaReceiveCb(recoveredPkt, outCh);
+	                    }
+	                }
+	            }
 
             // Remove FecHeader from original packet to restore normal structure
             // Original packet: [CustomHeader][FecHeader][Payload]
@@ -614,9 +659,8 @@ QbbNetDevice::EnableFec(bool enable)
 
     if (enable && !m_fecEnabled)
     {
-        // Create encoder and decoder
-        m_fecEncoder = Ptr<FecEncoder>(new FecEncoder(m_fecBlockSize, m_fecInterleavingDepth));
-        m_fecDecoder = Ptr<FecDecoder>(new FecDecoder(m_fecBlockSize, m_fecInterleavingDepth));
+        // Per-flow encoder/decoder 状态按需创建
+        m_fecFlows.clear();
         m_fecEnabled = true;
 
         NS_LOG_INFO("FEC enabled on device with parameters: r=" << m_fecBlockSize
@@ -625,8 +669,7 @@ QbbNetDevice::EnableFec(bool enable)
     else if (!enable && m_fecEnabled)
     {
         // Disable FEC
-        m_fecEncoder = 0;
-        m_fecDecoder = 0;
+        m_fecFlows.clear();
         m_fecEnabled = false;
 
         NS_LOG_INFO("FEC disabled on device");
@@ -646,6 +689,7 @@ QbbNetDevice::SetFecParameters(uint32_t blockSize, uint32_t interleavingDepth)
 
     m_fecBlockSize = blockSize;
     m_fecInterleavingDepth = interleavingDepth;
+    m_fecFlows.clear();
 
     NS_LOG_INFO("FEC parameters set: r=" << m_fecBlockSize
                 << " c=" << m_fecInterleavingDepth);
@@ -667,7 +711,7 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
 {
     NS_LOG_FUNCTION(this << packet);
 
-    if (!m_fecEnabled || !m_fecEncoder)
+    if (!m_fecEnabled)
     {
         NS_LOG_WARN("FEC not enabled, cannot encode packet");
         return;
@@ -685,19 +729,31 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
         return;
     }
 
-    // Calculate base PSN for this coding block
-    uint32_t basePSN = (m_txSeqNum / m_fecBlockSize) * m_fecBlockSize;
+    // 以五元组（sip,dip,sport,dport）为粒度维护 FEC 状态，避免跨流/跨消息编码。
+    CustomHeader peekCh(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+    packet->PeekHeader(peekCh);
+    FecFlowKey key{peekCh.sip, peekCh.dip, peekCh.udp.sport, peekCh.udp.dport};
+
+    FecFlowState& flow = m_fecFlows[key];
+    if (!flow.encoder || !flow.decoder)
+    {
+        flow.encoder = Ptr<FecEncoder>(new FecEncoder(m_fecBlockSize, m_fecInterleavingDepth));
+        flow.decoder = Ptr<FecDecoder>(new FecDecoder(m_fecBlockSize, m_fecInterleavingDepth));
+        flow.txNextPsn = 0;
+        flow.txHasBlockHeader = false;
+        flow.rxBlockHeaders.clear();
+    }
+
+    uint32_t psn = flow.txNextPsn;
+    uint32_t basePSN = (psn / m_fecBlockSize) * m_fecBlockSize;
 
     // If this is the first packet of a new block, save its CustomHeader for repair packets
-    if (m_txSeqNum == basePSN)
+    if (psn == basePSN)
     {
-        // Extract and save CustomHeader from the first packet of the block
-        CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
-        packet->PeekHeader(ch);
-        m_currentBlockHeader = ch;
-
+        flow.txBlockHeader = peekCh;
+        flow.txHasBlockHeader = true;
         NS_LOG_DEBUG("FEC: Saved CustomHeader from first packet of block " << basePSN
-                  << " sip=" << m_currentBlockHeader.sip << " dip=" << m_currentBlockHeader.dip);
+                  << " sip=" << flow.txBlockHeader.sip << " dip=" << flow.txBlockHeader.dip);
     }
 
     // CRITICAL: Add FEC header AFTER CustomHeader in the ORIGINAL packet
@@ -707,7 +763,7 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     fecHeader.SetType(FecHeader::FEC_DATA);
     fecHeader.SetBlockSize(m_fecBlockSize);
     fecHeader.SetInterleavingDepth(m_fecInterleavingDepth);
-    fecHeader.SetPSN(m_txSeqNum);
+    fecHeader.SetPSN(psn);
     fecHeader.SetBasePSN(basePSN);
 
     // Remove CustomHeader temporarily
@@ -734,23 +790,23 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
 
     // Now encodingPacket has structure: [FecHeader][Payload]
     // Encode with FEC encoder
-    m_fecEncoder->EncodePacket(encodingPacket, m_txSeqNum);
+    flow.encoder->EncodePacket(encodingPacket, psn);
     m_fecEncodedPackets++;
 
-    NS_LOG_DEBUG("FEC encoded packet PSN=" << m_txSeqNum << " (block " << basePSN << ")"
+    NS_LOG_DEBUG("FEC encoded packet PSN=" << psn << " (block " << basePSN << ")"
                  << " encoded_size=" << encodingPacket->GetSize());
 
     // Increment sequence number
-    m_txSeqNum++;
+    flow.txNextPsn++;
 
     // Check if coding block is complete
-    if (m_fecEncoder->IsBlockComplete())
+    if (flow.encoder->IsBlockComplete())
     {
-        NS_LOG_INFO("FEC: Coding block complete at PSN " << m_txSeqNum - 1
+        NS_LOG_INFO("FEC: Coding block complete at PSN " << flow.txNextPsn - 1
                   << ", generating repair packets");
 
         // Generate repair packets
-        std::vector<Ptr<Packet>> repairPackets = m_fecEncoder->GenerateRepairPackets();
+        std::vector<Ptr<Packet>> repairPackets = flow.encoder->GenerateRepairPackets();
         m_fecRepairPackets += repairPackets.size();
 
         NS_LOG_INFO("FEC: Generated " << repairPackets.size() << " repair packets");
@@ -761,10 +817,14 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
         // }
 
         // Send repair packets
-        SendRepairPackets(repairPackets);
+        if (flow.txHasBlockHeader)
+        {
+            SendRepairPackets(repairPackets, flow.txBlockHeader);
+        }
 
         // Reset encoder for next block
-        m_fecEncoder->ResetBlock();
+        flow.encoder->ResetBlock();
+        flow.txHasBlockHeader = false;
 
         NS_LOG_DEBUG("Generated and sent " << repairPackets.size() << " repair packets");
     }
@@ -775,10 +835,22 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
 {
     NS_LOG_FUNCTION(this << packet);
 
-    if (!m_fecEnabled || !m_fecDecoder)
+    if (!m_fecEnabled)
     {
         NS_LOG_WARN("FEC not enabled, cannot decode packet");
         return;
+    }
+
+    // Per-flow decoder keyed by (sip,dip,sport,dport) to avoid cross-flow coding/decoding.
+    FecFlowKey key{ch.sip, ch.dip, ch.udp.sport, ch.udp.dport};
+    FecFlowState& flow = m_fecFlows[key];
+    if (!flow.decoder)
+    {
+        flow.encoder = Ptr<FecEncoder>(new FecEncoder(m_fecBlockSize, m_fecInterleavingDepth));
+        flow.decoder = Ptr<FecDecoder>(new FecDecoder(m_fecBlockSize, m_fecInterleavingDepth));
+        flow.txNextPsn = 0;
+        flow.txHasBlockHeader = false;
+        flow.rxBlockHeaders.clear();
     }
 
     // Parse FEC header
@@ -789,18 +861,58 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
     {
         // Data packet - store in decoder
         uint32_t psn = fecHeader.GetPSN();
-        m_fecDecoder->ReceiveDataPacket(packet->Copy(), psn);
+        flow.decoder->ReceiveDataPacket(packet->Copy(), psn);
 
-        // Save CustomHeader from first packet of the block (for recovery)
-        uint32_t basePSN = (psn / m_fecBlockSize) * m_fecBlockSize;
-        if (psn == basePSN)
-        {
-            m_receivedBlockHeader = ch;
-            NS_LOG_DEBUG("FEC RX: Saved CustomHeader from first packet of block " << basePSN
-                      << " sip=" << m_receivedBlockHeader.sip << " dip=" << m_receivedBlockHeader.dip);
-        }
+	        // Save CustomHeader from first packet of the block (for recovery)
+	        uint32_t basePSN = (psn / m_fecBlockSize) * m_fecBlockSize;
+	        if (psn == basePSN)
+	        {
+	            flow.rxBlockHeaders[basePSN] = ch;
+	            NS_LOG_DEBUG("FEC RX: Saved CustomHeader from first packet of block " << basePSN
+	                      << " sip=" << ch.sip << " dip=" << ch.dip);
+	        }
 
         NS_LOG_DEBUG("FEC received data packet PSN=" << psn);
+
+        // 数据包到达也尝试恢复（覆盖“repair 先到、数据后到”的时序）
+        while (true)
+        {
+            std::vector<Ptr<Packet>> recoveredPackets = flow.decoder->RecoverLostPackets();
+            if (recoveredPackets.empty())
+            {
+                break;
+            }
+            m_fecRecoveredPackets += recoveredPackets.size();
+
+            for (auto recoveredPkt : recoveredPackets)
+            {
+                FecHeader recoveredFecHeader;
+                recoveredPkt->PeekHeader(recoveredFecHeader);
+                uint32_t recoveredBase = recoveredFecHeader.GetBasePSN();
+
+                auto itHdr = flow.rxBlockHeaders.find(recoveredBase);
+                if (itHdr == flow.rxBlockHeaders.end())
+                {
+                    continue;
+                }
+                CustomHeader outCh = itHdr->second;
+                outCh.getInt = 1;
+                outCh.l3Prot = 0x11;
+
+                recoveredPkt->RemoveHeader(recoveredFecHeader);
+                recoveredPkt->AddHeader(outCh);
+
+                if (m_node->GetNodeType() > 0)  // switch
+                {
+                    recoveredPkt->AddPacketTag(FlowIdTag(m_ifIndex));
+                    m_node->SwitchReceiveFromDevice(this, recoveredPkt, outCh);
+                }
+                else  // NIC
+                {
+                    m_rdmaReceiveCb(recoveredPkt, outCh);
+                }
+            }
+        }
     }
     else if (fecHeader.GetType() == FecHeader::FEC_REPAIR)
     {
@@ -808,6 +920,15 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
         uint32_t basePSN = fecHeader.GetBasePSN();
         uint16_t isn = fecHeader.GetISN();
         std::vector<uint32_t> recipe = fecHeader.GetRecipe();
+
+        // 即便块内首个 data 包丢失，也要能用 repair 包携带的五元组信息重建回放头部。
+        // 注意：回放到上层的 recovered 包应按“数据包”处理，因此强制 l3Prot=0x11。
+        if (flow.rxBlockHeaders.find(basePSN) == flow.rxBlockHeaders.end())
+        {
+            CustomHeader base = ch;
+            base.l3Prot = 0x11;
+            flow.rxBlockHeaders[basePSN] = base;
+        }
 
         // Log repair packet reception with recipe details
         std::stringstream recipeStr;
@@ -829,61 +950,77 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
         Ptr<Packet> repairPayload = packet->Copy();
         repairPayload->RemoveHeader(fecHeader);
 
-        m_fecDecoder->ReceiveRepairPacket(repairPayload, basePSN, isn, recipe);
+        flow.decoder->ReceiveRepairPacket(repairPayload, basePSN, isn, recipe);
 
         NS_LOG_DEBUG("FEC stored repair packet in decoder buffer");
 
-        // Attempt recovery with this new repair packet
-        std::vector<Ptr<Packet>> recoveredPackets = m_fecDecoder->RecoverLostPackets();
-
-        NS_LOG_DEBUG("FEC recovery attempt result: " << recoveredPackets.size() << " packets recovered");
-        
-        // Debug callback: log_type=3 (recovery_result), param0=isn, param1=recovered_count
-        if (!m_fecDebugCallback.IsNull()) {
-            m_fecDebugCallback(m_node->GetId(), 3, isn, recoveredPackets.size(), 0, 0);
-        }
-
-        if (!recoveredPackets.empty())
+        // Attempt recovery with this new repair packet (loop until stable)
+        uint32_t totalRecovered = 0;
+        while (true)
         {
-            m_fecRecoveredPackets += recoveredPackets.size();
+            std::vector<Ptr<Packet>> recoveredPackets = flow.decoder->RecoverLostPackets();
+            if (recoveredPackets.empty())
+            {
+                break;
+            }
 
-            NS_LOG_INFO("FEC Node " << m_node->GetId() << " successfully recovered " 
-                        << recoveredPackets.size() << " packets using repair ISN=" << isn);
+            totalRecovered += recoveredPackets.size();
+            m_fecRecoveredPackets += recoveredPackets.size();
 
             // Forward recovered packets to upper layer
             for (auto recoveredPkt : recoveredPackets)
             {
-                // Recovered packet has structure: [FecHeader][Payload]
-                // We need to use the saved CustomHeader from first packet of the block
                 FecHeader recoveredFecHeader;
                 recoveredPkt->PeekHeader(recoveredFecHeader);
+                uint32_t recoveredBase = recoveredFecHeader.GetBasePSN();
+                auto itHdr = flow.rxBlockHeaders.find(recoveredBase);
+                if (itHdr == flow.rxBlockHeaders.end())
+                {
+                    continue;
+                }
+                CustomHeader outCh = itHdr->second;
+                outCh.getInt = 1;
+                outCh.l3Prot = 0x11;
 
-                // Use the saved CustomHeader from first packet of the block
-                CustomHeader ch = m_receivedBlockHeader;
-                ch.getInt = 1;
+                recoveredPkt->RemoveHeader(recoveredFecHeader);
+                recoveredPkt->AddHeader(outCh);
 
                 // Process as normal received packet
                 if (m_node->GetNodeType() > 0)  // switch
                 {
                     recoveredPkt->AddPacketTag(FlowIdTag(m_ifIndex));
-                    m_node->SwitchReceiveFromDevice(this, recoveredPkt, ch);
+                    m_node->SwitchReceiveFromDevice(this, recoveredPkt, outCh);
                 }
                 else  // NIC
                 {
-                    m_rdmaReceiveCb(recoveredPkt, ch);
+                    m_rdmaReceiveCb(recoveredPkt, outCh);
                 }
             }
         }
-    }
+
+        NS_LOG_DEBUG("FEC recovery attempt result: " << totalRecovered << " packets recovered");
+
+        // Debug callback: log_type=3 (recovery_result), param0=isn, param1=recovered_count
+        if (!m_fecDebugCallback.IsNull())
+        {
+            m_fecDebugCallback(m_node->GetId(), 3, isn, totalRecovered, 0, 0);
+        }
+
+        if (totalRecovered > 0)
+        {
+            NS_LOG_INFO("FEC Node " << m_node->GetId() << " successfully recovered "
+                                    << totalRecovered << " packets using repair ISN=" << isn);
+        }
+	    }
 }
 
 void
-QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets)
+QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets, const CustomHeader& baseHeader)
 {
     NS_LOG_FUNCTION(this << repairPackets.size());
 
-    NS_LOG_DEBUG("FEC: Using saved header - sip=" << m_currentBlockHeader.sip
-              << " dip=" << m_currentBlockHeader.dip);
+    NS_LOG_DEBUG("FEC: Using saved header - sip=" << baseHeader.sip
+              << " dip=" << baseHeader.dip);
 
     for (size_t i = 0; i < repairPackets.size(); ++i)
     {
@@ -894,7 +1031,7 @@ QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets)
 
         // Create CustomHeader for repair packet using saved header from first data packet
         // This ensures repair packets have the correct source/destination IP for routing
-        CustomHeader ch = m_currentBlockHeader;  // Copy the saved header
+        CustomHeader ch = baseHeader;  // Copy the saved header
 
         // Mark this as a repair packet by setting l3Prot to a special value
         ch.l3Prot = 0xFB;  // Use 0xFB to indicate FEC repair packet (0xFD is used by NACK)
@@ -937,4 +1074,3 @@ QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets)
 }
 
 }  // namespace ns3
-

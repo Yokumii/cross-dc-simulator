@@ -21,6 +21,39 @@
 
 namespace ns3 {
 
+namespace {
+// 64-bit FNV-1a，用于 EdgeCNP per-flow 发送频率限制的稳定 key
+uint64_t
+Fnv1a64(const void* data, size_t len)
+{
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+    uint64_t h = 1469598103934665603ULL;
+    for (size_t i = 0; i < len; ++i) {
+        h ^= bytes[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+uint64_t
+EdgeCnpFlowKey(const CustomHeader& ch)
+{
+    struct Key {
+        uint32_t sip;
+        uint32_t dip;
+        uint16_t sport;
+        uint16_t dport;
+        uint16_t pg;
+    } k;
+    k.sip = ch.sip;
+    k.dip = ch.dip;
+    k.sport = ch.udp.sport;
+    k.dport = ch.udp.dport;
+    k.pg = ch.udp.pg;
+    return Fnv1a64(&k, sizeof(k));
+}
+}  // namespace
+
 TypeId SwitchNode::GetTypeId(void) {
     static TypeId tid =
         TypeId("ns3::SwitchNode")
@@ -204,6 +237,10 @@ void SwitchNode::CheckAndSendEdgeCNP(uint32_t inDev, uint32_t outDev, uint32_t q
     if (!m_EdgeCnpEnabled)
         return;
 
+    if (ch.l3Prot != 0x11) {  // 仅对 UDP/RDMA 数据包触发
+        return;
+    }
+
     if (!IsCrossDcFlow(ch.sip, ch.dip)) {
         return;
     }
@@ -212,9 +249,7 @@ void SwitchNode::CheckAndSendEdgeCNP(uint32_t inDev, uint32_t outDev, uint32_t q
 
     if (!shouldSendEdgeCnp) return;
 
-    uint64_t flowKey = ((uint64_t)ch.sip << 32) | ((uint64_t)ch.dip) | 
-                       ((uint64_t)ch.udp.sport << 16) | ((uint64_t)ch.udp.dport) | 
-                       ((uint64_t)ch.udp.pg);
+    uint64_t flowKey = EdgeCnpFlowKey(ch);
 
     // 检查是否需要限制CNP发送频率
     if (m_lastEdgeCnpTime.find(flowKey) != m_lastEdgeCnpTime.end() && 
@@ -547,8 +582,20 @@ uint16_t SwitchNode::EtherToPpp(uint16_t proto) {
 }
 
 bool SwitchNode::IsCrossDcFlow(uint32_t sip, uint32_t dip) {
-    // TODO: 这里事实上简化了实现，仅考虑 k = 4, overscript = 2 的两个数据中心拓扑结构
-    return (sip / 53) != (dip / 53);
+    if (Settings::servers_per_dc == 0 || Settings::num_dc <= 1) {
+        return false;
+    }
+
+    uint32_t srcId = Settings::ip_to_node_id(Ipv4Address(sip));
+    uint32_t dstId = Settings::ip_to_node_id(Ipv4Address(dip));
+
+    if (srcId >= Settings::host_num || dstId >= Settings::host_num) {
+        return false;
+    }
+
+    uint32_t srcDc = srcId / Settings::servers_per_dc;
+    uint32_t dstDc = dstId / Settings::servers_per_dc;
+    return srcDc != dstDc;
 }
 
 } /* namespace ns3 */

@@ -40,6 +40,7 @@ def get_server_id(server_index, dc_id, n_server_per_dc, n_switch_per_dc, n_dci_p
     return dc_offset + server_index
 
 if __name__ == "__main__":
+    HEADER_WIDTH = 16  # 固定宽度，避免回写真实流数时残留旧字符
     # Default parameters
     cdf_file = "AliStorage2019.txt"
     k_fat = 4
@@ -190,7 +191,7 @@ if __name__ == "__main__":
     n_flow = 0
     
     # Write estimated flow count as placeholder (will update later)
-    ofile.write(f"{total_flow_estimate}\n")
+    ofile.write(f"{total_flow_estimate:{HEADER_WIDTH}d}\n")
 
     # Generate intra-datacenter flows
     print("Generating intra-datacenter flows...")
@@ -269,7 +270,7 @@ if __name__ == "__main__":
 
     # Update actual flow count
     ofile.seek(0)
-    ofile.write(f"{n_flow}")
+    ofile.write(f"{n_flow:{HEADER_WIDTH}d}\n")
     ofile.close()
 
     print(f"Traffic generation complete.")

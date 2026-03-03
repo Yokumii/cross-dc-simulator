@@ -182,11 +182,11 @@ bool TestEncoder()
                 "Block should be complete after r packets");
 
     // Generate repair packets
-    // For LoWAR(8, 4): buckets = 8 + 4 + 2 + 1 = 15 repair packets
+    // For LoWAR(8, 4): 每个 coding unit 最多 1 个 repair，共 4 个
     std::vector<Ptr<Packet>> repairPackets = encoder->GenerateRepairPackets();
-    uint32_t expectedRepairPackets = 15;  // sum of buckets across all layers
+    uint32_t expectedRepairPackets = interleavingDepth;
     TEST_ASSERT(repairPackets.size() == expectedRepairPackets,
-                "Should generate 15 repair packets for LoWAR(8,4)");
+                "Should generate 4 repair packets for LoWAR(8,4)");
 
     // Verify repair packet headers
     for (size_t i = 0; i < repairPackets.size(); i++) {
@@ -285,11 +285,11 @@ bool TestEndToEnd()
                 "Encoding block should be complete");
 
     // Generate repair packets
-    // For LoWAR(8, 4): buckets = 8 + 4 + 2 + 1 = 15 repair packets
+    // For LoWAR(8, 4): 每个 coding unit 最多 1 个 repair，共 4 个
     std::vector<Ptr<Packet>> repairPackets = encoder->GenerateRepairPackets();
-    uint32_t expectedRepairPackets = 15;
+    uint32_t expectedRepairPackets = interleavingDepth;
     TEST_ASSERT(repairPackets.size() == expectedRepairPackets,
-                "Should generate 15 repair packets for LoWAR(8,4)");
+                "Should generate 4 repair packets for LoWAR(8,4)");
 
     // Simulate reception with one packet loss
     uint32_t lostPSN = 5;
