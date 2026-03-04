@@ -122,6 +122,12 @@ FecDecoder::ReceiveRepairPacket(Ptr<Packet> repairPacket,
       return;
     }
 
+  if (recipe.empty())
+    {
+      // Empty recipe carries no redundancy information.
+      return;
+    }
+
   // 验证 recipe 中的 PSN 是否合理
   for (size_t i = 0; i < recipe.size(); ++i)
     {
@@ -144,6 +150,15 @@ FecDecoder::ReceiveRepairPacket(Ptr<Packet> repairPacket,
                     << " which exceeds MAX_BLOCK_SIZE=" << MAX_BLOCK_SIZE
                     << " (basePSN=" << basePSN << ")" << std::endl;
         }
+    }
+
+  // 如果 repair 的 recipe 当前已无缺失（missingCount==0），该 repair 永远不可能用于恢复，直接丢弃以节省内存。
+  // （后续不会“新增丢包”，missingCount 只会随数据到达/恢复而减少）
+  uint32_t dummyMissing = 0;
+  uint32_t missingCount = CountMissingInRecipe(recipe, dummyMissing);
+  if (missingCount == 0)
+    {
+      return;
     }
 
   // Store repair packet info
@@ -196,8 +211,13 @@ FecDecoder::RecoverLostPackets()
 
           NS_LOG_INFO("Successfully recovered packet using repair ISN=" << it->isn);
 
+          // 回收已使用/冗余的 repair，避免 m_repairBuffer 长期增长导致内存膨胀。
+          m_repairBuffer.erase(
+            std::remove_if(m_repairBuffer.begin(), m_repairBuffer.end(),
+                           [](const RepairPacketInfo& info) { return info.used; }),
+            m_repairBuffer.end());
+
           // Recovery may enable more recoveries, so restart loop
-          // (In practice, we could optimize this with a queue)
           return recovered; // Return immediately to allow caller to process
         }
     }
@@ -205,6 +225,15 @@ FecDecoder::RecoverLostPackets()
   if (recovered.empty())
     {
       NS_LOG_DEBUG("No packets recovered in this attempt (checked " << m_repairBuffer.size() << " repairs)");
+    }
+
+  // 无恢复进展时，也回收“已经无意义”的 repair（missingCount==0 会在 AttemptRecoveryWithRepair 标记 used）。
+  if (!m_repairBuffer.empty())
+    {
+      m_repairBuffer.erase(
+        std::remove_if(m_repairBuffer.begin(), m_repairBuffer.end(),
+                       [](const RepairPacketInfo& info) { return info.used; }),
+        m_repairBuffer.end());
     }
 
   return recovered;
@@ -320,6 +349,8 @@ FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
   if (missingCount == 0)
     {
       NS_LOG_DEBUG("Repair ISN=" << repairInfo.isn << " - all packets already received, no recovery needed");
+      // 该 repair 再也不会用于恢复，标记为 used 以便回收。
+      repairInfo.used = true;
       return 0;
     }
 

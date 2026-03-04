@@ -1043,6 +1043,15 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
                 }
             }
         }
+
+        // LoWAR：ROB/bitmap 仅需覆盖有限窗口；丢失严重时应及时丢弃旧块状态，避免内存常驻增长。
+        // 这里保留最近 4 个 block 的状态即可（超出窗口交由 RDMA 重传兜底）。
+        uint32_t keepBlocks = 4;
+        if (basePSN >= flow.cfgBlockSize * keepBlocks)
+        {
+            uint32_t threshold = basePSN - flow.cfgBlockSize * keepBlocks;
+            flow.decoder->CleanupOldBlocks(threshold);
+        }
     }
     else if (fecHeader.GetType() == FecHeader::FEC_REPAIR)
     {
@@ -1227,6 +1236,14 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
                     }
                 }
             }
+        }
+
+        // 同样对 repair 到达路径执行窗口化清理（避免 repairBuffer/reorderBuffer 累积）。
+        uint32_t keepBlocks = 4;
+        if (basePSN >= flow.cfgBlockSize * keepBlocks)
+        {
+            uint32_t threshold = basePSN - flow.cfgBlockSize * keepBlocks;
+            flow.decoder->CleanupOldBlocks(threshold);
         }
     }
 
