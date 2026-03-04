@@ -555,6 +555,14 @@ void on_phy_drop(FILE *fout, Ptr<QbbNetDevice> dev, Ptr<const Packet> pkt) {
  */
 void on_rto_timeout(FILE *fout, uint32_t nodeId, Ptr<RdmaQueuePair> qp, Time rto, uint32_t timeoutCount) {
     if (!fout || !qp) return;
+    // RTO 事件在丢包/高负载下可能非常密集，默认采样以避免日志与 IO 成为瓶颈（影响宿主机稳定性/SSH）。
+    // 仅保留 1/256 的事件用于趋势观察；如需全量，可把该采样逻辑去掉或改小采样率。
+    static uint32_t s_rto_sample = 0;
+    s_rto_sample++;
+    if ((s_rto_sample & 0xFFu) != 0)
+    {
+        return;
+    }
     uint32_t srcId = Settings::ip_to_node_id(qp->sip);
     uint32_t dstId = Settings::ip_to_node_id(qp->dip);
     fprintf(fout, "%lu %u %d %u %u %u %u %lu %lu %lu %u\n",
@@ -599,17 +607,9 @@ void on_fec_debug(FILE *fout, uint32_t nodeId, uint32_t logType,
                   uint32_t param0, uint32_t param1, uint32_t param2, uint32_t param3) {
     if (!fout) return;
 
-    // data_recv 事件量极大，大规模压测时建议采样，避免日志与 IO 成为瓶颈。
-    // 这里只对 logType==0 做 1/256 采样，其他事件全量保留。
-    if (logType == 0)
-    {
-        static uint32_t s_data_sample = 0;
-        s_data_sample++;
-        if ((s_data_sample & 0xFFu) != 0)
-        {
-            return;
-        }
-    }
+    // data_recv 事件量极大（每个数据包一条），大规模实验会引发 IO 爆炸并拖垮宿主机（SSH 卡顿/掉线）。
+    // 默认关闭 logType==0；建议只用 repair/negotiate/recovery/tail_flush 事件做 FEC 观测。
+    if (logType == 0) return;
 
     fprintf(fout, "%lu %u %u %u %u %u %u\n",
             (unsigned long)Simulator::Now().GetNanoSeconds(),
