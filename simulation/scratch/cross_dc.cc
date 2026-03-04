@@ -663,13 +663,35 @@ void fec_state_monitoring(FILE* fout, NodeContainer* n, uint32_t intervalNs)
     uint64_t xorBytes = 0;
     uint64_t ackqPkts = 0;
     uint64_t ackqBytes = 0;
+    uint64_t beqPkts = 0;
+    uint64_t beqBytes = 0;
+    uint64_t swMmuUsedBytes = 0;
+    uint64_t swMmuTotalBytes = 0;
 
     for (uint32_t i = 0; i < n->GetN(); ++i)
     {
         Ptr<Node> node = n->Get(i);
+
+        // Switch MMU occupancy (helps attribute memory spikes to in-flight buffering).
+        Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(node);
+        if (sw && sw->m_mmu)
+        {
+            swMmuUsedBytes += sw->m_mmu->GetUsedBufferTotal();
+            swMmuTotalBytes += sw->m_mmu->GetMmuBufferBytes();
+        }
+
         for (uint32_t j = 0; j < node->GetNDevices(); ++j)
         {
             Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(node->GetDevice(j));
+            if (dev)
+            {
+                Ptr<BEgressQueue> q = dev->GetQueue();
+                if (q)
+                {
+                    beqPkts += q->GetNPacketsTotal();
+                    beqBytes += q->GetNBytesTotal();
+                }
+            }
             if (!dev || !dev->IsFecEnabled())
             {
                 continue;
@@ -691,7 +713,7 @@ void fec_state_monitoring(FILE* fout, NodeContainer* n, uint32_t intervalNs)
     }
 
     uint64_t rssKb = ReadSelfRssKb();
-    fprintf(fout, "%lu rss_kb=%lu flows=%lu headers=%lu blocks=%lu repairs=%lu xor_bytes=%lu ackq_pkts=%lu ackq_bytes=%lu\n",
+    fprintf(fout, "%lu rss_kb=%lu flows=%lu headers=%lu blocks=%lu repairs=%lu xor_bytes=%lu ackq_pkts=%lu ackq_bytes=%lu beq_pkts=%lu beq_bytes=%lu sw_mmu_used=%lu sw_mmu_total=%lu\n",
             (unsigned long)Simulator::Now().GetNanoSeconds(),
             (unsigned long)rssKb,
             (unsigned long)flows,
@@ -700,7 +722,11 @@ void fec_state_monitoring(FILE* fout, NodeContainer* n, uint32_t intervalNs)
             (unsigned long)repairs,
             (unsigned long)xorBytes,
             (unsigned long)ackqPkts,
-            (unsigned long)ackqBytes);
+            (unsigned long)ackqBytes,
+            (unsigned long)beqPkts,
+            (unsigned long)beqBytes,
+            (unsigned long)swMmuUsedBytes,
+            (unsigned long)swMmuTotalBytes);
     fflush(fout);
 
     Simulator::Schedule(NanoSeconds(intervalNs), &fec_state_monitoring, fout, n, intervalNs);

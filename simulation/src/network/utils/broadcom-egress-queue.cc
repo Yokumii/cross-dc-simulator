@@ -239,6 +239,17 @@ BEgressQueue::GetNBytesTotal() const {
 }
 
 uint32_t
+BEgressQueue::GetNPacketsTotal() const
+{
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < m_queues.size(); ++i)
+    {
+        total += m_queues[i]->GetNPackets();
+    }
+    return total;
+}
+
+uint32_t
 BEgressQueue::GetLastQueue() {
     return m_qlast;
 }

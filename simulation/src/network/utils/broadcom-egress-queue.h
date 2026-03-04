@@ -42,6 +42,7 @@ namespace ns3 {
 		Ptr<Packet> DequeueRR(bool paused[]);
 		uint32_t GetNBytes(uint32_t qIndex) const;
 		uint32_t GetNBytesTotal() const;
+		uint32_t GetNPacketsTotal() const;
 		uint32_t GetLastQueue();
 
 		TracedCallback<Ptr<const Packet>, uint32_t> m_traceBeqEnqueue;
