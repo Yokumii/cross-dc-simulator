@@ -826,12 +826,11 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
 
     FecFlowState& flow = m_fecFlows[key];
     flow.lastActiveNs = nowNs;
-    if (!flow.encoder || !flow.decoder)
+    if (!flow.encoder)
     {
         flow.cfgBlockSize = m_fecBlockSize;
         flow.cfgInterleavingDepth = m_fecInterleavingDepth;
         flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
-        flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
         flow.txNextPsn = 0;
         flow.txHasBlockHeader = false;
         flow.rxBlockHeaders.clear();
@@ -852,7 +851,6 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
             m_fecPendingCfgs.erase(itPending);
 
             flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
-            flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
             flow.txHasBlockHeader = false;
             flow.rxBlockHeaders.clear();
 
@@ -980,7 +978,6 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
 
         // 下一条消息从 0 开始，避免跨消息编码/解码状态污染
         flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
-        flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
         flow.txNextPsn = 0;
         flow.txHasBlockHeader = false;
         flow.rxBlockHeaders.clear();
@@ -1049,7 +1046,6 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
         flow.cfgInterleavingDepth = fecHeader.GetInterleavingDepth();
         if (flow.cfgBlockSize == 0) flow.cfgBlockSize = m_fecBlockSize;
         if (flow.cfgInterleavingDepth == 0) flow.cfgInterleavingDepth = m_fecInterleavingDepth;
-        flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
         flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
         flow.txNextPsn = 0;
         flow.txHasBlockHeader = false;
@@ -1087,7 +1083,6 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
             if (flow.cfgBlockSize == 0) flow.cfgBlockSize = m_fecBlockSize;
             if (flow.cfgInterleavingDepth == 0) flow.cfgInterleavingDepth = m_fecInterleavingDepth;
 
-            flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
             flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
             flow.txNextPsn = 0;
             flow.txHasBlockHeader = false;
@@ -1202,7 +1197,6 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
             if (flow.cfgBlockSize == 0) flow.cfgBlockSize = m_fecBlockSize;
             if (flow.cfgInterleavingDepth == 0) flow.cfgInterleavingDepth = m_fecInterleavingDepth;
 
-            flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
             flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
             flow.txNextPsn = 0;
             flow.txHasBlockHeader = false;

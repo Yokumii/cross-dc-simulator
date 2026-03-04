@@ -111,8 +111,6 @@ FecEncoder::EncodePacket(Ptr<Packet> dataPacket, uint32_t psn)
     }
 
   // Store packet for later repair generation
-  m_blockPackets[psn] = dataPacket->Copy();
-
   // 仅选择一个 coding unit 进行 XOR 更新
   uint32_t unitIdx = (m_interleavingDepth == 0) ? 0 : (relativePsn % m_interleavingDepth);
   if (unitIdx < m_units.size())
@@ -214,8 +212,6 @@ FecEncoder::ResetBlock()
   m_lastLength = 0;
 
   // Clear block packets
-  m_blockPackets.clear();
-
   // Clear all coding units
   for (uint32_t unitIdx = 0; unitIdx < m_units.size(); ++unitIdx)
     {

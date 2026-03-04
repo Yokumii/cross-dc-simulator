@@ -11,7 +11,6 @@
 #define FEC_ENCODER_H
 
 #include <vector>
-#include <map>
 #include "ns3/object.h"
 #include "ns3/packet.h"
 #include "ns3/ptr.h"
@@ -170,12 +169,6 @@ private:
    */
   std::vector<CodingUnit> m_units;
 
-  /**
-   * \brief Map from PSN to packet for current block
-   *
-   * Stores packets temporarily for repair generation.
-   */
-  std::map<uint32_t, Ptr<Packet>> m_blockPackets;
 };
 
 } // namespace ns3
