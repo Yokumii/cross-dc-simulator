@@ -40,9 +40,44 @@ INTER_LATENCY="400000"
 FEC_BLOCK_SIZE="64"
 FEC_INTERLEAVING_DEPTH="8"
 
-# cross-dc lossy WAN 的默认开关
+# cross-dc lossy WAN 的默认开关（可通过命令行覆盖）
 PFC_ENABLED="0"
 IRN_ENABLED="1"
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --pfc)
+      PFC_ENABLED="$2"
+      shift 2
+      ;;
+    --irn)
+      IRN_ENABLED="$2"
+      shift 2
+      ;;
+    -h|--help)
+      echo "Usage: $0 [OPTIONS]"
+      echo "Options:"
+      echo "  --pfc 0|1   Enable PFC (default: 0)"
+      echo "  --irn 0|1   Enable IRN (default: 1)"
+      echo "  -h, --help  Show this help message"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Use --help for usage information"
+      exit 1
+      ;;
+  esac
+done
+
+if [[ "${PFC_ENABLED}" != "0" && "${PFC_ENABLED}" != "1" ]]; then
+  cecho "RED" "错误: --pfc 只支持 0/1，当前=${PFC_ENABLED}"
+  exit 1
+fi
+if [[ "${IRN_ENABLED}" != "0" && "${IRN_ENABLED}" != "1" ]]; then
+  cecho "RED" "错误: --irn 只支持 0/1，当前=${IRN_ENABLED}"
+  exit 1
+fi
 
 # FEC 观测：开启详细 FEC 日志，配合状态监控用于定位“收益/开销/拥塞”来源
 FEC_LOG_ENABLED="1"
