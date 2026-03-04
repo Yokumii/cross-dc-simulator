@@ -5,7 +5,7 @@
 本项目在原有单数据中心 RDMA 网络负载均衡功能的基础上，扩展了以下功能：
 
 - **跨数据中心仿真**：支持多数据中心 Fat-tree 拓扑，区分数据中心内（intra-DC）和跨数据中心（inter-DC）流量
-- **FEC（前向纠错）**：实现了支持消息感知编码块和分层交织的 FEC 方案，，用于在链路错误环境下提高传输可靠性
+- **FEC（前向纠错）**：实现了支持消息感知编码块与交织编码的 FEC 方案，用于在链路错误环境下提高传输可靠性
 - **EdgeCNP（边缘拥塞通知）**：在边缘交换机生成 CNP 包，改善跨数据中心流的拥塞控制性能
 
 ## 项目结构
@@ -204,50 +204,61 @@ python3 ../tools/traffic_gen/cross_dc_traffic_gen.py \
 
 ### FEC（前向纠错）实现机制
 
-本仿真器实现了基于消息感知编码块和分层交织技术的 FEC 模块，用于在链路错误环境下提高传输可靠性。
+本项目实现了一套面向跨数据中心（lossy WAN）场景的透明 FEC 机制，参考 LoWAR 思路做了两点关键工程化对齐：
+
+- **消息感知（message-aware）**：在“消息结束”时对尾块执行 flush，避免尾块不受保护。
+- **运行期可观测与可控**：提供可选的 FEC 日志与状态监控，便于定位内存/排队问题。
+
+> 实现位置：`simulation/src/point-to-point/model/qbb-net-device.*`、`fec-encoder.*`、`fec-decoder.*`、`fec-header.*`。
 
 #### 编码过程
 
 1. **编码块组织**：
    - 数据包按序列号分组为编码块，每个块包含 `r` 个数据包（块大小）
    - 每个编码块有唯一的基序列号（base PSN, bPSN），范围从 `bPSN` 到 `bPSN + r - 1`
+   - 当前实现按 **五元组（sip/dip/sport/dport）** 维护 FEC 状态，避免跨流/跨消息混编
+   - 在跨数据中心仿真中，默认只对 **跨 DC 流** 启用 FEC（intra-DC 流不编码），减少不必要的 repair 注入
 
-2. **分层交织编码**：
-   - 编码器维护 `c` 层交织结构（交织深度）
-   - 每层包含多个编码单元（bucket），数量为 `ceil(r / i^layer)`，其中 `i` 为交织索引（默认 2）
-   - 每个数据包根据公式 `bucket = (psn / i^layer) % bucketsPerLayer` 分配到各层的不同 bucket
-   - 每个 bucket 累积其包含数据包的 XOR 结果
+2. **交织编码（c 个 coding unit）**：
+   - 编码器维护 `c` 个 coding unit（可理解为 `c` 个交织桶）
+   - 数据包按 `relativePSN % c` 分配到对应 coding unit
+   - 每个 coding unit 维护：
+     - `xorBuffer`：该 unit 内数据包载荷的 XOR
+     - `recipe`：参与 XOR 的数据包 PSN 列表（用于恢复）
 
 3. **修复包生成**：
-   - 当编码块填满（收到 `r` 个数据包）时，为每层生成一个修复包
-   - 每个修复包是其所在层某个 bucket 的 XOR 结果
+   - 当编码块填满（收到 `r` 个数据包）时，最多生成 `c` 个修复包（每个 coding unit 一个）
+   - 每个修复包是其所在 coding unit 的 XOR 结果（一个 unit 最多生成一个 repair）
    - 修复包包含：
      - 类型标识（REPAIR）
      - 基序列号（bPSN）
-     - 交织序列号（ISN，标识修复包所属层）
+     - 交织序列号（ISN，标识修复包所属 unit）
      - 配方（Recipe）：参与 XOR 的数据包 PSN 列表
+   - **尾块 flush**：若消息结束但当前块未满 `r`，仍会生成 repair（携带尾块边界元信息），避免尾块完全依赖重传
 
 4. **包头格式**：
    ```
-   - Type (1 byte): DATA (0) 或 REPAIR (1)
-   - Block Size r (2 bytes): 编码块大小
-   - Interleaving Depth c (1 byte): 交织深度
-   - Base PSN (4 bytes): 编码块基序列号
-   - PSN/ISN (4/2 bytes): 数据包的 PSN 或修复包的 ISN
-   - Recipe Length (2 bytes): 配方长度（仅修复包）
-   - Recipe PSNs (4 bytes each): 配方中的 PSN 列表（仅修复包）
+   - Type (1 byte): DATA (0) / REPAIR (1) / NEGOTIATE (2)
+   - Block Size r (2 bytes)
+   - Interleaving Depth c (1 byte)
+   - Base PSN (4 bytes)
+   - DATA: PSN (4 bytes)
+   - REPAIR/NEGOTIATE:
+     - ISN (2 bytes)（NEGOTIATE 复用为 op-code）
+     - EdgeFlags (1 byte): bit0=hasFirst, bit1=hasLast
+     - LastRel (2 bytes), LastLength (2 bytes)（尾块裁剪用）
+     - RecipeLen (2 bytes) + RecipePSNs (4 bytes each)
    ```
 
 #### 解码与恢复过程
 
 1. **数据包接收**：
-   - 接收到的数据包存储在重排序缓冲区（reorder buffer）中
    - 使用位图（bitmap）跟踪每个编码块中已接收的数据包
-   - 每个编码块维护一个 `BlockState`，记录接收状态
+   - 解码器按 flow/block 维护必要的恢复状态，并在完成/超时/窗口推进时回收旧状态，避免常驻内存增长
 
 2. **修复包处理**：
-   - 接收到的修复包存储在修复包缓冲区中
-   - 每个修复包包含其配方（参与 XOR 的数据包 PSN 列表）
+   - 修复包携带 recipe；解码器对 recipe 中“已到达的数据包”做 XOR 抵消，尝试恢复缺失包
+   - 为控制内存，解码器不会长期缓存整块数据包副本（更偏向保存 XOR/位图与必要元信息）
 
 3. **丢失包恢复**：
    - 当修复包的配方中**恰好只有一个**数据包丢失时，可以恢复该包
@@ -263,21 +274,35 @@ python3 ../tools/traffic_gen/cross_dc_traffic_gen.py \
    - 配方中丢失 ≥2 个包：无法恢复（需要更多修复包或等待更多数据包）
 
 5. **缓冲区管理**：
-   - 使用位图高效跟踪每个编码块的接收状态
-   - 定期清理已完成的旧编码块，释放内存
-   - 对于无法恢复的包，记录统计信息
+   - 对每个 flow 维护 GC（idle 回收 / 完成回收 / 超时回收），避免大规模五元组导致状态常驻
+   - 对无法恢复的包，记录统计信息（可在 `*_out_fec.txt` / 日志中查看）
 
 #### 关键参数
 
 - **块大小 r**：每个编码块包含的数据包数量。较大的 `r` 提供更好的错误恢复能力，但增加延迟和内存开销
 - **交织深度 c**：交织层数。更多的层提供更好的突发丢失容忍能力，但增加修复包数量
-- **交织索引 i**：默认值为 2，控制各层 bucket 的分配模式
+
+#### 发送与排队（非常重要）
+
+- **repair 包不会进入 ACK/NACK 的最高优先级队列（qIndex=0）**，而是进入按 PG 的 repair 队列：
+  - 目的：避免 repair 绕过背压/准入控制导致交换机侧队列爆炸
+  - 当启用 PFC 时，repair 会遵循 `paused[pg]`（不会在暂停类上持续注入）
+
+#### 参数协商（NEGOTIATE）
+
+- 支持通过 NEGOTIATE 包同步未来消息使用的 `(r,c)`；协商结果会延迟到“下一条消息开始”生效，避免中途切参导致编解码不一致。
 
 #### 性能特性
 
-- **突发丢失容忍**：通过分层交织，即使连续丢失多个包，只要它们分布在不同层的不同 bucket，仍可能恢复
+- **突发丢失容忍**：通过将一个块内的数据包条带化地分散到 `c` 个 coding unit，可提升对突发丢失的鲁棒性
 - **低延迟**：修复包在编码块完成后立即生成，无需等待确认
 - **消息感知**：编码块基于数据包序列号自然划分，无需额外分组逻辑
+
+#### 可观测性（调试/定位内存与排队）
+
+- `--fec-log-enabled 0|1`：是否写入 `*_out_fec.txt`（详细事件日志）
+- `--fec-state-mon-enabled 0|1`：是否写入 `*_out_fec_state.txt`（轻量状态监控）
+  - 典型字段：`rss_kb / flows / blocks / repairs / xor_bytes / ackq_* / beq_* / sw_mmu_used`
 
 #### 部分仿真结果
 
@@ -293,7 +318,7 @@ python3 ../tools/traffic_gen/cross_dc_traffic_gen.py \
 
 **启用 FEC 对网络拥塞的影响：**
 
-由于目前 FEC 机制未结合拥塞控制算法进行进一步设计，启用 FEC 会加重网络拥塞情况。
+由于 FEC 会额外注入 repair，若不做节流/背压对齐，可能加重排队与拥塞；建议结合状态监控指标评估（尤其是 `beq_pkts/sw_mmu_used`）。
 
 ### EdgeCNP（边缘拥塞通知）实现机制
 
