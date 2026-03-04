@@ -44,8 +44,8 @@ FEC_INTERLEAVING_DEPTH="8"
 PFC_ENABLED="0"
 IRN_ENABLED="1"
 
-# FEC 观测：默认关闭详细 FEC 日志，开启轻量状态监控以验证机制是否真正生效
-FEC_LOG_ENABLED="0"
+# FEC 观测：开启详细 FEC 日志，配合状态监控用于定位“收益/开销/拥塞”来源
+FEC_LOG_ENABLED="1"
 FEC_STATE_MON_ENABLED="1"
 FEC_STATE_MON_INTERVAL_NS="10000000"  # 10ms
 
