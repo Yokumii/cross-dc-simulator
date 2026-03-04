@@ -1015,6 +1015,19 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
     {
         // Data packet - store in decoder
         uint32_t psn = fecHeader.GetPSN();
+        // 若该数据包携带“消息结束”标记，则把它视为 tail 观测点：即便尾块 repair 丢失，也应在短窗口后回收状态。
+        {
+            FlowStatTag fst;
+            if (packet->PeekPacketTag(fst))
+            {
+                uint8_t t = fst.GetType();
+                if (t == FlowStatTag::FLOW_END || t == FlowStatTag::FLOW_START_AND_END)
+                {
+                    flow.rxSawTail = true;
+                    flow.rxTailSeenNs = nowNs;
+                }
+            }
+        }
 
         // 若对端切换了 (r,c)，约定会在“下一条消息”从 psn=0 重新开始；
         // 因此在 psn==0 且参数变化时重置解码器，避免跨消息状态污染。
@@ -1110,6 +1123,17 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
         {
             uint32_t threshold = basePSN - flow.cfgBlockSize * keepBlocks;
             flow.decoder->CleanupOldBlocks(threshold);
+            for (auto it = flow.rxBlockHeaders.begin(); it != flow.rxBlockHeaders.end(); )
+            {
+                if (it->first < threshold)
+                {
+                    it = flow.rxBlockHeaders.erase(it);
+                }
+                else
+                {
+                    ++it;
+                }
+            }
         }
     }
     else if (fecHeader.GetType() == FecHeader::FEC_REPAIR)
@@ -1259,7 +1283,7 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
             for (uint32_t rel = 0; rel <= lastRel; ++rel)
             {
                 uint32_t psn = basePSN + rel;
-                if (flow.decoder->GetPacket(psn) == 0)
+                if (!flow.decoder->HasPacket(psn))
                 {
                     missing++;
                 }
@@ -1307,6 +1331,17 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
         {
             uint32_t threshold = basePSN - flow.cfgBlockSize * keepBlocks;
             flow.decoder->CleanupOldBlocks(threshold);
+            for (auto it = flow.rxBlockHeaders.begin(); it != flow.rxBlockHeaders.end(); )
+            {
+                if (it->first < threshold)
+                {
+                    it = flow.rxBlockHeaders.erase(it);
+                }
+                else
+                {
+                    ++it;
+                }
+            }
         }
     }
 

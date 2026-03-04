@@ -13,6 +13,7 @@
 #include <vector>
 #include <map>
 #include <bitset>
+#include <cstdint>
 #include "ns3/object.h"
 #include "ns3/packet.h"
 #include "ns3/ptr.h"
@@ -120,12 +121,14 @@ public:
   bool IsBlockComplete(uint32_t basePSN) const;
 
   /**
-   * \brief Get a packet from the reordering buffer
+   * \brief Query whether a packet PSN is available (received or recovered)
+   *
+   * 为避免缓存所有数据包，本解码器不再提供按 PSN 取包接口；上层仅需要缺失计数/尾块判断。
    *
    * \param psn Packet sequence number
-   * \return Packet if available, null otherwise
+   * \return True if available
    */
-  Ptr<Packet> GetPacket(uint32_t psn) const;
+  bool HasPacket(uint32_t psn) const;
 
   /**
    * \brief Remove old blocks from buffer
@@ -161,7 +164,8 @@ private:
    */
   struct RepairPacketInfo
   {
-    Ptr<Packet> packet;           ///< The repair packet data
+    std::vector<uint8_t> payload; ///< Repair payload bytes (without FEC header)
+    uint32_t payloadLen;          ///< Payload length in bytes
     uint32_t basePSN;             ///< Base PSN of coding block
     uint16_t isn;                 ///< Interleaving sequence number
     std::vector<uint32_t> recipe; ///< PSNs XORed in this repair
@@ -180,6 +184,12 @@ private:
     uint32_t basePSN;                          ///< Base PSN of this block
     std::bitset<MAX_BLOCK_SIZE> receivedBits;  ///< Bitmap of received packets
     uint32_t receivedCount;                    ///< Number of received packets
+    struct UnitXor
+    {
+      std::vector<uint8_t> xorBuf;
+      uint32_t maxLen{0};
+    };
+    std::vector<UnitXor> unitXor;              ///< size = m_interleavingDepth
   };
 
   /**
@@ -212,11 +222,8 @@ private:
 
   uint32_t m_blockSize;             ///< r: Coding block size
   uint32_t m_interleavingDepth;     ///< c: Number of interleaving layers
-
-  /**
-   * \brief Reordering buffer: PSN → Packet
-   */
-  std::map<uint32_t, Ptr<Packet>> m_reorderBuffer;
+  // 丢弃 PSN 小于该阈值的 data/repair（用于在清理旧块后忽略迟到的 repair，避免旧块状态被重新创建）
+  uint32_t m_dropBeforePsn{0};
 
   /**
    * \brief Block state tracking: bPSN → BlockState
