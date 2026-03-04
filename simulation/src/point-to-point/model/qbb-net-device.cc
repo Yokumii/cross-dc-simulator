@@ -26,6 +26,7 @@
 #include "fec-decoder.h"
 
 #include <algorithm>
+#include <limits>
 #include <stdint.h>
 #include <stdio.h>
 #include <utility>
@@ -744,6 +745,16 @@ QbbNetDevice::EnableFec(bool enable)
         // Per-flow encoder/decoder 状态按需创建
         m_fecFlows.clear();
         m_fecPendingCfgs.clear();
+        m_fecPendingRepairs.clear();
+        m_fecPendingRepairBytes = 0;
+        m_fecRepairDropped = 0;
+        m_fecRepairTokenBytes = 0;
+        m_fecRepairTokenLastNs = 0;
+        m_fecRepairRateBps = 0;
+        if (m_fecRepairDrainEvent.IsRunning())
+        {
+            Simulator::Cancel(m_fecRepairDrainEvent);
+        }
         m_fecEnabled = true;
         m_fecLastGcNs = 0;
         if (m_fecMaintenanceEvent.IsRunning())
@@ -763,8 +774,14 @@ QbbNetDevice::EnableFec(bool enable)
         {
             Simulator::Cancel(m_fecMaintenanceEvent);
         }
+        if (m_fecRepairDrainEvent.IsRunning())
+        {
+            Simulator::Cancel(m_fecRepairDrainEvent);
+        }
         m_fecFlows.clear();
         m_fecPendingCfgs.clear();
+        m_fecPendingRepairs.clear();
+        m_fecPendingRepairBytes = 0;
         m_fecEnabled = false;
 
         NS_LOG_INFO("FEC disabled on device");
@@ -807,6 +824,9 @@ QbbNetDevice::GetFecInternalStats() const
 {
     FecInternalStats s;
     s.flowCount = m_fecFlows.size();
+    s.pendingRepairCount = m_fecPendingRepairs.size();
+    s.pendingRepairBytes = m_fecPendingRepairBytes;
+    s.repairDropped = m_fecRepairDropped;
     for (const auto& kv : m_fecFlows)
     {
         const FecFlowState& f = kv.second;
@@ -1079,6 +1099,10 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
 
         // Generate repair packets
         std::vector<Ptr<Packet>> repairPackets = flow.encoder->GenerateRepairPackets(false);
+        if (m_fecMaxRepairsPerBlock > 0 && repairPackets.size() > m_fecMaxRepairsPerBlock)
+        {
+            repairPackets.resize(m_fecMaxRepairsPerBlock);
+        }
         m_fecRepairPackets += repairPackets.size();
 
         NS_LOG_INFO("FEC: Generated " << repairPackets.size() << " repair packets");
@@ -1106,18 +1130,35 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     {
         if (flow.encoder->HasData())
         {
-            std::vector<Ptr<Packet>> tailRepairs = flow.encoder->GenerateRepairPackets(true);
-            if (!tailRepairs.empty() && flow.txHasBlockHeader)
-            {
-                m_fecRepairPackets += tailRepairs.size();
-                SendRepairPackets(tailRepairs, flow.txBlockHeader);
-            }
+            const uint32_t tailDataCnt = (psn >= basePSN) ? (psn - basePSN + 1) : 0;
 
-            // Debug callback: log_type=4 (tail_flush), param0=flowHash, param1=basePSN, param2=tailDataCnt, param3=repairCnt
-            if (!m_fecDebugCallback.IsNull())
+            // LoWAR 对齐：短尾块通常更适合直接交给重传，而不是注入 repair
+            // （避免 repair 造成队列膨胀，拖累其它跨 DC 流的排队时延）。
+            if (m_fecTailFlushMinPkts > 0 && tailDataCnt < m_fecTailFlushMinPkts)
             {
-                uint32_t tailDataCnt = (psn >= basePSN) ? (psn - basePSN + 1) : 0;
-                m_fecDebugCallback(m_node->GetId(), 4, flowHash, basePSN, tailDataCnt, tailRepairs.size());
+                if (!m_fecDebugCallback.IsNull())
+                {
+                    m_fecDebugCallback(m_node->GetId(), 4, flowHash, basePSN, tailDataCnt, 0);
+                }
+            }
+            else
+            {
+                std::vector<Ptr<Packet>> tailRepairs = flow.encoder->GenerateRepairPackets(true);
+                if (m_fecMaxRepairsPerBlock > 0 && tailRepairs.size() > m_fecMaxRepairsPerBlock)
+                {
+                    tailRepairs.resize(m_fecMaxRepairsPerBlock);
+                }
+
+                if (!tailRepairs.empty() && flow.txHasBlockHeader)
+                {
+                    m_fecRepairPackets += tailRepairs.size();
+                    SendRepairPackets(tailRepairs, flow.txBlockHeader);
+                }
+
+                if (!m_fecDebugCallback.IsNull())
+                {
+                    m_fecDebugCallback(m_node->GetId(), 4, flowHash, basePSN, tailDataCnt, tailRepairs.size());
+                }
             }
         }
 
@@ -1535,6 +1576,121 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
 }
 
 void
+QbbNetDevice::FecDrainRepairQueue()
+{
+    if (!m_fecEnabled)
+    {
+        return;
+    }
+    if (m_node->GetNodeType() != 0)
+    {
+        return;
+    }
+    if (!m_rdmaEQ)
+    {
+        return;
+    }
+
+    const uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+    if (m_fecRepairTokenLastNs == 0)
+    {
+        m_fecRepairTokenLastNs = nowNs;
+    }
+
+    // 计算 pacing 速率：默认按 c/r 的冗余比例，与链路速率成比例注入 repair
+    if (m_fecRepairRateBps == 0 && m_fecRepairPacingEnabled)
+    {
+        double ratio = m_fecRepairRateRatio;
+        if (ratio <= 0.0 && m_fecBlockSize > 0)
+        {
+            ratio = static_cast<double>(m_fecInterleavingDepth) / static_cast<double>(m_fecBlockSize);
+        }
+        ratio = std::max(0.0, ratio);
+
+        const uint64_t linkBps = m_bps.GetBitRate();
+        const long double scaled = static_cast<long double>(linkBps) * static_cast<long double>(ratio);
+        m_fecRepairRateBps = static_cast<uint64_t>(std::min<long double>(
+            scaled, static_cast<long double>(std::numeric_limits<uint64_t>::max())));
+    }
+
+    // 更新 token bucket
+    if (m_fecRepairPacingEnabled)
+    {
+        const uint64_t deltaNs = (nowNs > m_fecRepairTokenLastNs) ? (nowNs - m_fecRepairTokenLastNs) : 0;
+        if (deltaNs > 0 && m_fecRepairRateBps > 0)
+        {
+            // addBytes = rateBps/8 * deltaNs/1e9，使用 128-bit 避免溢出
+            const __int128 numer = static_cast<__int128>(m_fecRepairRateBps) * static_cast<__int128>(deltaNs);
+            const uint64_t addBytes = static_cast<uint64_t>(numer / static_cast<__int128>(8'000'000'000ull));
+            m_fecRepairTokenBytes = std::min<uint64_t>(m_fecRepairBurstBytes, m_fecRepairTokenBytes + addBytes);
+        }
+        m_fecRepairTokenLastNs = nowNs;
+    }
+    else
+    {
+        // 不启用 pacing：视为无限 token
+        m_fecRepairTokenBytes = std::numeric_limits<uint64_t>::max() / 2;
+        m_fecRepairTokenLastNs = nowNs;
+    }
+
+    bool anyEnqueued = false;
+    while (!m_fecPendingRepairs.empty())
+    {
+        const FecPendingRepair& pr = m_fecPendingRepairs.front();
+        const uint32_t bytes = (pr.bytes != 0) ? pr.bytes : static_cast<uint32_t>(pr.packet->GetSize());
+
+        if (m_fecRepairPacingEnabled && m_fecRepairTokenBytes < bytes)
+        {
+            break;
+        }
+
+        m_rdmaEQ->EnqueueRepairQ(pr.packet, pr.pg);
+        m_traceEnqueue(pr.packet, pr.pg);
+
+        if (m_fecRepairPacingEnabled)
+        {
+            m_fecRepairTokenBytes -= bytes;
+        }
+        if (m_fecPendingRepairBytes >= bytes)
+        {
+            m_fecPendingRepairBytes -= bytes;
+        }
+        m_fecPendingRepairs.pop_front();
+        anyEnqueued = true;
+    }
+
+    if (anyEnqueued)
+    {
+        DequeueAndTransmit();
+    }
+
+    // 若仍有 pending，则按 deficit 估算下一次 drain 时间，避免忙等
+    if (!m_fecPendingRepairs.empty())
+    {
+        uint64_t waitNs = 1000ull;  // 默认 1us
+        if (m_fecRepairPacingEnabled && m_fecRepairRateBps > 0)
+        {
+            const uint32_t needBytes = (m_fecPendingRepairs.front().bytes != 0)
+                                           ? m_fecPendingRepairs.front().bytes
+                                           : static_cast<uint32_t>(m_fecPendingRepairs.front().packet->GetSize());
+            const uint64_t deficit = (needBytes > m_fecRepairTokenBytes) ? (needBytes - m_fecRepairTokenBytes) : 0;
+            if (deficit > 0)
+            {
+                // waitNs = deficit * 8e9 / rateBps
+                const __int128 numer = static_cast<__int128>(deficit) * static_cast<__int128>(8'000'000'000ull);
+                waitNs = static_cast<uint64_t>(numer / static_cast<__int128>(m_fecRepairRateBps));
+                waitNs = std::max<uint64_t>(1, waitNs);
+            }
+        }
+        if (!m_fecRepairDrainEvent.IsRunning())
+        {
+            m_fecRepairDrainEvent =
+                Simulator::Schedule(NanoSeconds(waitNs), &QbbNetDevice::FecDrainRepairQueue, this);
+        }
+    }
+}
+
+void
 QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets, const CustomHeader& baseHeader)
 {
     NS_LOG_FUNCTION(this << repairPackets.size());
@@ -1542,7 +1698,13 @@ QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets, c
     NS_LOG_DEBUG("FEC: Using saved header - sip=" << baseHeader.sip
               << " dip=" << baseHeader.dip);
 
-    for (size_t i = 0; i < repairPackets.size(); ++i)
+    size_t maxToSend = repairPackets.size();
+    if (m_fecMaxRepairsPerBlock > 0 && maxToSend > m_fecMaxRepairsPerBlock)
+    {
+        maxToSend = m_fecMaxRepairsPerBlock;
+    }
+
+    for (size_t i = 0; i < maxToSend; ++i)
     {
         Ptr<Packet> repairPkt = repairPackets[i]->Copy();
 
@@ -1572,8 +1734,23 @@ QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets, c
         if (m_node->GetNodeType() == 0)  // server
         {
             uint32_t pg = (ch.udp.pg < RdmaEgressQueue::qCnt) ? ch.udp.pg : 0;
-            m_rdmaEQ->EnqueueRepairQ(repairPkt, pg);
-            m_traceEnqueue(repairPkt, pg);
+            const uint32_t bytes = static_cast<uint32_t>(repairPkt->GetSize());
+
+            // repair 是 best-effort：超过 backlog 就直接丢弃，交给 RDMA 重传/超时接管
+            if (m_fecRepairMaxBacklogBytes > 0 &&
+                (m_fecPendingRepairBytes + bytes) > m_fecRepairMaxBacklogBytes)
+            {
+                m_fecRepairDropped++;
+                m_traceDrop(repairPkt, pg);
+                continue;
+            }
+
+            FecPendingRepair pr;
+            pr.packet = repairPkt;
+            pr.pg = pg;
+            pr.bytes = bytes;
+            m_fecPendingRepairs.push_back(pr);
+            m_fecPendingRepairBytes += bytes;
             
             // Removed: repair packet sent event (event_type=1) - using debug callback only
             // if (!m_fecEventCallback.IsNull()) {
@@ -1591,8 +1768,15 @@ QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets, c
         }
     }
 
-    // Trigger transmission
-    DequeueAndTransmit();
+    if (m_node->GetNodeType() == 0)
+    {
+        // 触发 drain（按 token bucket 分批注入 NIC repairQ）
+        FecDrainRepairQueue();
+    }
+    else
+    {
+        DequeueAndTransmit();
+    }
 }
 
 void

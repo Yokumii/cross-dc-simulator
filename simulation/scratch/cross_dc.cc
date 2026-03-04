@@ -154,6 +154,12 @@ uint32_t edge_cnp_interval = 4;
 uint32_t fec_enabled = 0;             // 0: disabled, 1: enabled
 uint32_t fec_block_size = 64;         // r: coding block size (number of packets)
 uint32_t fec_interleaving_depth = 8;  // c: interleaving depth (number of layers)
+uint32_t fec_tail_flush_min_pkts = 8; // 尾块 flush 最小数据包数（短尾块不注入 repair）
+uint32_t fec_max_repairs_per_block = 0; // 每块最多 repair 数（0 表示不限制）
+uint32_t fec_repair_pacing_enabled = 1; // repair 注入 pacing（LoWAR 风格 best-effort）
+double fec_repair_rate_ratio = 0.0;     // repair 注入速率比例（0 表示按 c/r 自动）
+uint64_t fec_repair_burst_bytes = 65536; // token bucket burst
+uint64_t fec_repair_max_backlog_bytes = 8ull * 1024 * 1024; // pending repair backlog 上限
 uint32_t fec_log_enabled = 1;         // 0: disable FEC debug log file, 1: enable
 uint32_t fec_state_mon_enabled = 0;   // 0: disable, 1: enable
 uint32_t fec_state_mon_interval_ns = 10000000; // default 10ms
@@ -663,6 +669,9 @@ void fec_state_monitoring(FILE* fout, NodeContainer* n, uint32_t intervalNs)
     uint64_t xorBytes = 0;
     uint64_t ackqPkts = 0;
     uint64_t ackqBytes = 0;
+    uint64_t pendingRepairPkts = 0;
+    uint64_t pendingRepairBytes = 0;
+    uint64_t repairDropped = 0;
     uint64_t beqPkts = 0;
     uint64_t beqBytes = 0;
     uint64_t swMmuUsedBytes = 0;
@@ -702,6 +711,9 @@ void fec_state_monitoring(FILE* fout, NodeContainer* n, uint32_t intervalNs)
             blocks += s.totalDecoderBlocks;
             repairs += s.totalDecoderRepairs;
             xorBytes += s.totalDecoderXorBytes;
+            pendingRepairPkts += s.pendingRepairCount;
+            pendingRepairBytes += s.pendingRepairBytes;
+            repairDropped += s.repairDropped;
 
             Ptr<RdmaEgressQueue> eq = dev->GetRdmaQueue();
             if (eq && eq->m_ackQ)
@@ -713,7 +725,7 @@ void fec_state_monitoring(FILE* fout, NodeContainer* n, uint32_t intervalNs)
     }
 
     uint64_t rssKb = ReadSelfRssKb();
-    fprintf(fout, "%lu rss_kb=%lu flows=%lu headers=%lu blocks=%lu repairs=%lu xor_bytes=%lu ackq_pkts=%lu ackq_bytes=%lu beq_pkts=%lu beq_bytes=%lu sw_mmu_used=%lu sw_mmu_total=%lu\n",
+    fprintf(fout, "%lu rss_kb=%lu flows=%lu headers=%lu blocks=%lu repairs=%lu xor_bytes=%lu ackq_pkts=%lu ackq_bytes=%lu pending_repair_pkts=%lu pending_repair_bytes=%lu repair_dropped=%lu beq_pkts=%lu beq_bytes=%lu sw_mmu_used=%lu sw_mmu_total=%lu\n",
             (unsigned long)Simulator::Now().GetNanoSeconds(),
             (unsigned long)rssKb,
             (unsigned long)flows,
@@ -723,6 +735,9 @@ void fec_state_monitoring(FILE* fout, NodeContainer* n, uint32_t intervalNs)
             (unsigned long)xorBytes,
             (unsigned long)ackqPkts,
             (unsigned long)ackqBytes,
+            (unsigned long)pendingRepairPkts,
+            (unsigned long)pendingRepairBytes,
+            (unsigned long)repairDropped,
             (unsigned long)beqPkts,
             (unsigned long)beqBytes,
             (unsigned long)swMmuUsedBytes,
@@ -1337,6 +1352,24 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("FEC_INTERLEAVING_DEPTH") == 0) {
                 conf >> fec_interleaving_depth;
                 std::cerr << "FEC_INTERLEAVING_DEPTH\t\t\t" << fec_interleaving_depth << '\n';
+            } else if (key.compare("FEC_TAIL_FLUSH_MIN_PKTS") == 0) {
+                conf >> fec_tail_flush_min_pkts;
+                std::cerr << "FEC_TAIL_FLUSH_MIN_PKTS\t\t\t" << fec_tail_flush_min_pkts << '\n';
+            } else if (key.compare("FEC_MAX_REPAIRS_PER_BLOCK") == 0) {
+                conf >> fec_max_repairs_per_block;
+                std::cerr << "FEC_MAX_REPAIRS_PER_BLOCK\t\t" << fec_max_repairs_per_block << '\n';
+            } else if (key.compare("FEC_REPAIR_PACING_ENABLED") == 0) {
+                conf >> fec_repair_pacing_enabled;
+                std::cerr << "FEC_REPAIR_PACING_ENABLED\t\t" << fec_repair_pacing_enabled << '\n';
+            } else if (key.compare("FEC_REPAIR_RATE_RATIO") == 0) {
+                conf >> fec_repair_rate_ratio;
+                std::cerr << "FEC_REPAIR_RATE_RATIO\t\t\t" << fec_repair_rate_ratio << '\n';
+            } else if (key.compare("FEC_REPAIR_BURST_BYTES") == 0) {
+                conf >> fec_repair_burst_bytes;
+                std::cerr << "FEC_REPAIR_BURST_BYTES\t\t\t" << fec_repair_burst_bytes << '\n';
+            } else if (key.compare("FEC_REPAIR_MAX_BACKLOG_BYTES") == 0) {
+                conf >> fec_repair_max_backlog_bytes;
+                std::cerr << "FEC_REPAIR_MAX_BACKLOG_BYTES\t\t" << fec_repair_max_backlog_bytes << '\n';
             } else if (key.compare("FEC_LOG_ENABLED") == 0) {
                 conf >> fec_log_enabled;
                 std::cerr << "FEC_LOG_ENABLED\t\t\t\t" << fec_log_enabled << '\n';
@@ -1694,6 +1727,12 @@ int main(int argc, char *argv[]) {
                 Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(n.Get(i)->GetDevice(j));
                 if (dev) {
                     dev->SetFecParameters(fec_block_size, fec_interleaving_depth);
+                    dev->SetFecTailFlushMinPkts(fec_tail_flush_min_pkts);
+                    dev->SetFecMaxRepairsPerBlock(fec_max_repairs_per_block);
+                    dev->SetFecRepairPacing(static_cast<bool>(fec_repair_pacing_enabled),
+                                            fec_repair_rate_ratio,
+                                            fec_repair_max_backlog_bytes,
+                                            fec_repair_burst_bytes);
                     dev->EnableFec(true);
                     // Setup FEC debug callback (optional)
                     if (fec_log_enabled && fec_output)

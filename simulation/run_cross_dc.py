@@ -62,6 +62,12 @@ ENABLE_IRN {enabled_irn}
 FEC_ENABLED {fec_enabled}
 FEC_BLOCK_SIZE {fec_block_size}
 FEC_INTERLEAVING_DEPTH {fec_interleaving_depth}
+FEC_TAIL_FLUSH_MIN_PKTS {fec_tail_flush_min_pkts}
+FEC_MAX_REPAIRS_PER_BLOCK {fec_max_repairs_per_block}
+FEC_REPAIR_PACING_ENABLED {fec_repair_pacing_enabled}
+FEC_REPAIR_RATE_RATIO {fec_repair_rate_ratio}
+FEC_REPAIR_BURST_BYTES {fec_repair_burst_bytes}
+FEC_REPAIR_MAX_BACKLOG_BYTES {fec_repair_max_backlog_bytes}
 FEC_LOG_ENABLED {fec_log_enabled}
 FEC_STATE_MON_ENABLED {fec_state_mon_enabled}
 FEC_STATE_MON_INTERVAL_NS {fec_state_mon_interval_ns}
@@ -192,6 +198,18 @@ def main():
                       type=int, default=64, help="FEC block size r (default: 64)")
     parser.add_argument('--fec-interleaving-depth', dest='fec_interleaving_depth', action='store',
                       type=int, default=8, help="FEC interleaving depth c (default: 8)")
+    parser.add_argument('--fec-tail-flush-min-pkts', dest='fec_tail_flush_min_pkts', action='store',
+                      type=int, default=8, help="Tail flush min data pkts (default: 8)")
+    parser.add_argument('--fec-max-repairs-per-block', dest='fec_max_repairs_per_block', action='store',
+                      type=int, default=0, help="Max repairs per block (0=unlimited, default: 0)")
+    parser.add_argument('--fec-repair-pacing-enabled', dest='fec_repair_pacing_enabled', action='store',
+                      type=int, default=1, help="Enable repair injection pacing (default: 1)")
+    parser.add_argument('--fec-repair-rate-ratio', dest='fec_repair_rate_ratio', action='store',
+                      type=float, default=0.0, help="Repair pacing ratio (0=auto c/r, default: 0.0)")
+    parser.add_argument('--fec-repair-burst-bytes', dest='fec_repair_burst_bytes', action='store',
+                      type=int, default=65536, help="Repair pacing burst bytes (default: 65536)")
+    parser.add_argument('--fec-repair-max-backlog-bytes', dest='fec_repair_max_backlog_bytes', action='store',
+                      type=int, default=8 * 1024 * 1024, help="Max pending repair backlog bytes (default: 8MiB)")
     parser.add_argument('--fec-log-enabled', dest='fec_log_enabled', action='store',
                       type=int, default=1, help="Enable FEC debug log file output (default: 1)")
     parser.add_argument('--fec-state-mon-enabled', dest='fec_state_mon_enabled', action='store',
@@ -495,6 +513,12 @@ def main():
             fec_enabled=args.fec_enabled,
             fec_block_size=args.fec_block_size,
             fec_interleaving_depth=args.fec_interleaving_depth,
+            fec_tail_flush_min_pkts=args.fec_tail_flush_min_pkts,
+            fec_max_repairs_per_block=args.fec_max_repairs_per_block,
+            fec_repair_pacing_enabled=args.fec_repair_pacing_enabled,
+            fec_repair_rate_ratio=args.fec_repair_rate_ratio,
+            fec_repair_burst_bytes=args.fec_repair_burst_bytes,
+            fec_repair_max_backlog_bytes=args.fec_repair_max_backlog_bytes,
             fec_log_enabled=args.fec_log_enabled,
             fec_state_mon_enabled=args.fec_state_mon_enabled,
             fec_state_mon_interval_ns=args.fec_state_mon_interval_ns
