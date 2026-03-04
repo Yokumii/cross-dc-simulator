@@ -303,7 +303,9 @@ def main():
     if enabled_irn == 1 and enabled_pfc == 1:
         raise Exception("CONFIG ERROR : If IRN is turn-on, then you should turn off PFC.")
     if enabled_irn == 0 and enabled_pfc == 0:
-        raise Exception("CONFIG ERROR : Either IRN or PFC should be true.")
+        # 允许同时关闭 IRN 与 PFC：用于对齐 LoWAR 的“lossy WAN + 无 PFC”基线对比，
+        # 以及评估 FEC 在“仅依赖重传/超时恢复”时的收益。
+        print("WARNING: Both IRN=0 and PFC=0. This may increase timeouts/retransmissions.", file=sys.stderr)
     if args.simul_time < 0.005:
         raise Exception("CONFIG ERROR : Runtime must be larger than 5ms.")
 
