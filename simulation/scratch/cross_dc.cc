@@ -30,6 +30,7 @@
 #include <fstream>
 #include <iostream>
 #include <unordered_map>
+#include <unistd.h>
 
 #include "ns3/applications-module.h"
 #include "ns3/broadcom-node.h"
@@ -154,6 +155,9 @@ uint32_t fec_enabled = 0;             // 0: disabled, 1: enabled
 uint32_t fec_block_size = 64;         // r: coding block size (number of packets)
 uint32_t fec_interleaving_depth = 8;  // c: interleaving depth (number of layers)
 uint32_t fec_log_enabled = 1;         // 0: disable FEC debug log file, 1: enable
+uint32_t fec_state_mon_enabled = 0;   // 0: disable, 1: enable
+uint32_t fec_state_mon_interval_ns = 10000000; // default 10ms
+std::string fec_state_mon_file;
 
 // Added from Here
 double load = 10.0;
@@ -625,6 +629,70 @@ void on_fec_debug(FILE *fout, uint32_t nodeId, uint32_t logType,
     {
         fflush(fout);
     }
+}
+
+static uint64_t ReadSelfRssKb()
+{
+    // /proc/self/statm: size resident share text lib data dt
+    std::ifstream in("/proc/self/statm");
+    if (!in.good())
+    {
+        return 0;
+    }
+    uint64_t size = 0, resident = 0;
+    in >> size >> resident;
+    long page = sysconf(_SC_PAGESIZE);
+    if (page <= 0)
+    {
+        return 0;
+    }
+    return (resident * (uint64_t)page) / 1024;
+}
+
+void fec_state_monitoring(FILE* fout, NodeContainer* n, uint32_t intervalNs)
+{
+    if (!fout || !n)
+    {
+        return;
+    }
+
+    uint64_t flows = 0;
+    uint64_t headers = 0;
+    uint64_t blocks = 0;
+    uint64_t repairs = 0;
+    uint64_t xorBytes = 0;
+
+    for (uint32_t i = 0; i < n->GetN(); ++i)
+    {
+        Ptr<Node> node = n->Get(i);
+        for (uint32_t j = 0; j < node->GetNDevices(); ++j)
+        {
+            Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(node->GetDevice(j));
+            if (!dev || !dev->IsFecEnabled())
+            {
+                continue;
+            }
+            auto s = dev->GetFecInternalStats();
+            flows += s.flowCount;
+            headers += s.totalRxBlockHeaders;
+            blocks += s.totalDecoderBlocks;
+            repairs += s.totalDecoderRepairs;
+            xorBytes += s.totalDecoderXorBytes;
+        }
+    }
+
+    uint64_t rssKb = ReadSelfRssKb();
+    fprintf(fout, "%lu rss_kb=%lu flows=%lu headers=%lu blocks=%lu repairs=%lu xor_bytes=%lu\n",
+            (unsigned long)Simulator::Now().GetNanoSeconds(),
+            (unsigned long)rssKb,
+            (unsigned long)flows,
+            (unsigned long)headers,
+            (unsigned long)blocks,
+            (unsigned long)repairs,
+            (unsigned long)xorBytes);
+    fflush(fout);
+
+    Simulator::Schedule(NanoSeconds(intervalNs), &fec_state_monitoring, fout, n, intervalNs);
 }
 
 /**
@@ -1154,6 +1222,15 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("FEC_MON_FILE") == 0) {
                 conf >> fec_mon_file;
                 std::cerr << "FEC_MON_FILE\t\t\t\t" << fec_mon_file << '\n';
+            } else if (key.compare("FEC_STATE_MON_FILE") == 0) {
+                conf >> fec_state_mon_file;
+                std::cerr << "FEC_STATE_MON_FILE\t\t\t\t" << fec_state_mon_file << '\n';
+            } else if (key.compare("FEC_STATE_MON_ENABLED") == 0) {
+                conf >> fec_state_mon_enabled;
+                std::cerr << "FEC_STATE_MON_ENABLED\t\t\t\t" << fec_state_mon_enabled << '\n';
+            } else if (key.compare("FEC_STATE_MON_INTERVAL_NS") == 0) {
+                conf >> fec_state_mon_interval_ns;
+                std::cerr << "FEC_STATE_MON_INTERVAL_NS\t\t\t" << fec_state_mon_interval_ns << '\n';
             } else if (key.compare("LINK_DOWN") == 0) {
                 conf >> link_down_time >> link_down_A >> link_down_B;
                 std::cerr << "LINK_DOWN\t\t\t\t" << link_down_time << ' ' << link_down_A << ' '
@@ -1391,10 +1468,16 @@ int main(int argc, char *argv[]) {
     {
         fec_output = fopen(fec_mon_file.c_str(), "w");
     }
+    FILE* fec_state_output = nullptr;
+    if (fec_state_mon_enabled)
+    {
+        fec_state_output = fopen(fec_state_mon_file.c_str(), "w");
+    }
     // 统一设置较大的 stdio buffer，显著减少系统调用，避免大规模实验下 IO 抖动影响主机（例如 SSH 卡顿/掉线）。
     if (pfc_file) setvbuf(pfc_file, NULL, _IOFBF, 1 << 20);
     if (rto_output) setvbuf(rto_output, NULL, _IOFBF, 1 << 20);
     if (fec_output) setvbuf(fec_output, NULL, _IOFBF, 1 << 20);
+    if (fec_state_output) setvbuf(fec_state_output, NULL, _IOFBF, 1 << 20);
 
     QbbHelper qbb;
     Ipv4AddressHelper ipv4;
@@ -1588,6 +1671,12 @@ int main(int argc, char *argv[]) {
             }
         }
         std::cout << "FEC enabled on all devices" << std::endl;
+    }
+
+    if (fec_state_mon_enabled && fec_state_output)
+    {
+        Simulator::Schedule(NanoSeconds(0), &fec_state_monitoring, fec_state_output, &n,
+                            fec_state_mon_interval_ns);
     }
 
     fct_output = fopen(fct_output_file.c_str(), "w");

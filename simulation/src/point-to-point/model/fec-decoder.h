@@ -158,6 +158,11 @@ public:
    */
   bool IsIdle() const;
 
+  // 轻量观测接口：用于大规模实验定位内存增长来源（不会返回或持有数据包对象）。
+  size_t GetBlockStateCount() const { return m_blockStates.size(); }
+  size_t GetRepairBufferCount() const { return m_repairBuffer.size(); }
+  size_t GetApproxXorBytes() const;
+
 private:
   /**
    * \brief Repair packet information

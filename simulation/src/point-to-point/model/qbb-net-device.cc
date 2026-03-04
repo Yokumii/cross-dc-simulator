@@ -665,6 +665,25 @@ QbbNetDevice::GetFecStatistics() const
     return stats;
 }
 
+QbbNetDevice::FecInternalStats
+QbbNetDevice::GetFecInternalStats() const
+{
+    FecInternalStats s;
+    s.flowCount = m_fecFlows.size();
+    for (const auto& kv : m_fecFlows)
+    {
+        const FecFlowState& f = kv.second;
+        s.totalRxBlockHeaders += f.rxBlockHeaders.size();
+        if (f.decoder)
+        {
+            s.totalDecoderBlocks += f.decoder->GetBlockStateCount();
+            s.totalDecoderRepairs += f.decoder->GetRepairBufferCount();
+            s.totalDecoderXorBytes += f.decoder->GetApproxXorBytes();
+        }
+    }
+    return s;
+}
+
 void
 QbbNetDevice::FecMaintenanceTick()
 {

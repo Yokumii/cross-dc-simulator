@@ -289,6 +289,17 @@ public:
   };
   
   FecStatistics GetFecStatistics() const;
+
+  struct FecInternalStats {
+    uint64_t flowCount{0};
+    uint64_t totalRxBlockHeaders{0};
+    uint64_t totalDecoderBlocks{0};
+    uint64_t totalDecoderRepairs{0};
+    uint64_t totalDecoderXorBytes{0};
+  };
+
+  // 仅用于实验观测：汇总当前设备上的 FEC 状态规模，帮助定位内存增长来源
+  FecInternalStats GetFecInternalStats() const;
   
   // FEC callback types
   typedef Callback<void, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> FecEventCallback;

@@ -40,6 +40,7 @@ CONN_MON_FILE mix/output/{id}/{id}_out_conn.txt
 EST_ERROR_MON_FILE mix/output/{id}/{id}_out_est_error.txt
 RTO_MON_FILE mix/output/{id}/{id}_out_rto.txt
 FEC_MON_FILE mix/output/{id}/{id}_out_fec.txt
+FEC_STATE_MON_FILE mix/output/{id}/{id}_out_fec_state.txt
 
 QLEN_MON_START {qlen_mon_start}
 QLEN_MON_END {qlen_mon_end}
@@ -62,6 +63,8 @@ FEC_ENABLED {fec_enabled}
 FEC_BLOCK_SIZE {fec_block_size}
 FEC_INTERLEAVING_DEPTH {fec_interleaving_depth}
 FEC_LOG_ENABLED {fec_log_enabled}
+FEC_STATE_MON_ENABLED {fec_state_mon_enabled}
+FEC_STATE_MON_INTERVAL_NS {fec_state_mon_interval_ns}
 
 CONWEAVE_TX_EXPIRY_TIME {cwh_tx_expiry_time}
 CONWEAVE_REPLY_TIMEOUT_EXTRA {cwh_extra_reply_deadline}
@@ -191,6 +194,10 @@ def main():
                       type=int, default=8, help="FEC interleaving depth c (default: 8)")
     parser.add_argument('--fec-log-enabled', dest='fec_log_enabled', action='store',
                       type=int, default=1, help="Enable FEC debug log file output (default: 1)")
+    parser.add_argument('--fec-state-mon-enabled', dest='fec_state_mon_enabled', action='store',
+                      type=int, default=0, help="Enable FEC state monitor output (default: 0)")
+    parser.add_argument('--fec-state-mon-interval-ns', dest='fec_state_mon_interval_ns', action='store',
+                      type=int, default=10000000, help="FEC state monitor interval (ns) (default: 10000000)")
     parser.add_argument('--dry-run', dest='dry_run', action='store_true',
                       help="Only generate topology/traffic/config then exit (no waf run / analysis)")
     parser.add_argument('--minimal-flows', dest='minimal_flows', action='store',
@@ -488,7 +495,9 @@ def main():
             fec_enabled=args.fec_enabled,
             fec_block_size=args.fec_block_size,
             fec_interleaving_depth=args.fec_interleaving_depth,
-            fec_log_enabled=args.fec_log_enabled
+            fec_log_enabled=args.fec_log_enabled,
+            fec_state_mon_enabled=args.fec_state_mon_enabled,
+            fec_state_mon_interval_ns=args.fec_state_mon_interval_ns
         )
     else:
         print("unknown cc:{}".format(args.cc))

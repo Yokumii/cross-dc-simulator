@@ -365,6 +365,21 @@ FecDecoder::IsIdle() const
   return m_blockStates.empty() && m_repairBuffer.empty();
 }
 
+size_t
+FecDecoder::GetApproxXorBytes() const
+{
+  size_t total = 0;
+  for (const auto& kv : m_blockStates)
+    {
+      const BlockState& s = kv.second;
+      for (const auto& u : s.unitXor)
+        {
+          total += u.xorBuf.size();
+        }
+    }
+  return total;
+}
+
 Ptr<Packet>
 FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
 {
