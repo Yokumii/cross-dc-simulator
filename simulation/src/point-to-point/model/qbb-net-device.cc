@@ -1056,7 +1056,8 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
             }
         }
 
-        flow.decoder->ReceiveDataPacket(packet->Copy(), psn);
+        // 直接传入该 data packet（[FecHeader][Payload]）；decoder 内部只做轻量 XOR 累计，不会长期持有包对象。
+        flow.decoder->ReceiveDataPacket(packet, psn);
 
 	        // Save CustomHeader from first packet of the block (for recovery)
 	        uint32_t basePSN = (psn / flow.cfgBlockSize) * flow.cfgBlockSize;
