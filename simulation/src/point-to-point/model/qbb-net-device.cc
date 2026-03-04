@@ -76,6 +76,88 @@ PackRc(uint32_t r, uint32_t c)
 {
     return (r & 0xFFFFu) | ((c & 0xFFFFu) << 16);
 }
+
+static inline uint16_t
+ReadNtohU16(const uint8_t* p)
+{
+    return (static_cast<uint16_t>(p[0]) << 8) | static_cast<uint16_t>(p[1]);
+}
+
+static inline uint32_t
+ReadNtohU32(const uint8_t* p)
+{
+    return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
+           (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
+}
+
+// 安全判定：避免对非 FEC 的 UDP 包误解码（否则 PeekHeader/Deserialize 可能读取随机字段造成异常或 OOM）。
+static inline bool
+LooksLikeFecDataPacket(Ptr<Packet> pkt)
+{
+    if (!pkt)
+    {
+        return false;
+    }
+    if (pkt->GetSize() < FecHeader::GetBaseSize())
+    {
+        return false;
+    }
+
+    uint8_t buf[12];
+    if (pkt->CopyData(buf, sizeof(buf)) != sizeof(buf))
+    {
+        return false;
+    }
+
+    uint8_t type = buf[0];
+    if (type != static_cast<uint8_t>(FecHeader::FEC_DATA))
+    {
+        return false;
+    }
+
+    uint16_t blockSize = ReadNtohU16(buf + 1);
+    uint8_t interDepth = buf[3];
+    uint32_t basePsn = ReadNtohU32(buf + 4);
+    uint32_t psn = ReadNtohU32(buf + 8);
+
+    if (blockSize == 0 || blockSize > 4096)
+    {
+        return false;
+    }
+    if (interDepth == 0 || interDepth > 64)
+    {
+        return false;
+    }
+    if ((basePsn % blockSize) != 0)
+    {
+        return false;
+    }
+    if (psn < basePsn || (psn - basePsn) >= blockSize)
+    {
+        return false;
+    }
+    return true;
+}
+
+static inline bool
+IsCrossDcFlowForFec(uint32_t sip, uint32_t dip)
+{
+    if (Settings::servers_per_dc == 0 || Settings::num_dc <= 1)
+    {
+        return false;
+    }
+
+    uint32_t srcId = Settings::ip_to_node_id(Ipv4Address(sip));
+    uint32_t dstId = Settings::ip_to_node_id(Ipv4Address(dip));
+    if (srcId >= Settings::host_num || dstId >= Settings::host_num)
+    {
+        return false;
+    }
+
+    uint32_t srcDc = srcId / Settings::servers_per_dc;
+    uint32_t dstDc = dstId / Settings::servers_per_dc;
+    return srcDc != dstDc;
+}
 }  // namespace
 
 // uint32_t RdmaEgressQueue::ack_q_idx = 3; // 3: Middle priority
@@ -425,21 +507,24 @@ void QbbNetDevice::Receive(Ptr<Packet> packet) {
         }
         else if (ch.l3Prot == 0x11)  // UDP data packet with FEC
         {
-            // Data packets have structure: [CustomHeader][FecHeader][Payload]
-            // Remove CustomHeader to access FecHeader and let FecReceive handle decoding/recovery.
+            // Data packets MAY have structure: [CustomHeader][FecHeader][Payload].
+            // 大规模场景下我们可能只对跨 DC 流启用 FEC；因此需要先做轻量判定再解码。
             Ptr<Packet> fecPacket = packet->Copy();
             CustomHeader tempCh(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
             fecPacket->RemoveHeader(tempCh);
-            FecReceive(fecPacket, tempCh);
+            if (LooksLikeFecDataPacket(fecPacket))
+            {
+                FecReceive(fecPacket, tempCh);
 
-            // Remove FecHeader from original packet to restore normal structure
-            // Original packet: [CustomHeader][FecHeader][Payload]
-            CustomHeader savedCh(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
-            packet->RemoveHeader(savedCh);
-            FecHeader tempFecHeader;
-            packet->RemoveHeader(tempFecHeader);
-            packet->AddHeader(savedCh);
-            // Now packet is: [CustomHeader][Payload] - normal structure
+                // Remove FecHeader from original packet to restore normal structure
+                // Original packet: [CustomHeader][FecHeader][Payload]
+                CustomHeader savedCh(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+                packet->RemoveHeader(savedCh);
+                FecHeader tempFecHeader;
+                packet->RemoveHeader(tempFecHeader);
+                packet->AddHeader(savedCh);
+                // Now packet is: [CustomHeader][Payload] - normal structure
+            }
 
             // Continue with normal processing (fall through to line below)
         }
@@ -809,6 +894,17 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     // 以五元组（sip,dip,sport,dport）为粒度维护 FEC 状态，避免跨流/跨消息编码。
     CustomHeader peekCh(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
     packet->PeekHeader(peekCh);
+
+    // LoWAR 的目标是“跨 WAN 的透明纠错”。在跨 DC 仿真中，优先只对跨 DC 流启用 FEC，
+    // 避免对大量 intra-DC 流额外注入 repair 导致队列/内存爆炸。
+    if (Settings::num_dc > 1 && Settings::servers_per_dc > 0)
+    {
+        if (!IsCrossDcFlowForFec(peekCh.sip, peekCh.dip))
+        {
+            return;
+        }
+    }
+
     FecFlowKey key{peekCh.sip, peekCh.dip, peekCh.udp.sport, peekCh.udp.dport};
     uint32_t flowHash = static_cast<uint32_t>(FecFlowKeyHash{}(key));
     uint64_t nowNs = Simulator::Now().GetNanoSeconds();
