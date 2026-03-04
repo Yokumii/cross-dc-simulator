@@ -258,6 +258,9 @@ public:
   };
 
   std::unordered_map<FecFlowKey, FecFlowState, FecFlowKeyHash> m_fecFlows;
+  uint64_t m_fecLastGcNs = 0;
+
+  void FecGcFlows(uint64_t nowNs);
 
   // FEC statistics
   uint32_t m_fecEncodedPackets;         ///< Number of data packets encoded

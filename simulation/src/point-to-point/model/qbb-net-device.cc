@@ -76,31 +76,6 @@ PackRc(uint32_t r, uint32_t c)
 {
     return (r & 0xFFFFu) | ((c & 0xFFFFu) << 16);
 }
-
-static inline void
-FecMaybeGcFlows(std::unordered_map<QbbNetDevice::FecFlowKey, QbbNetDevice::FecFlowState, QbbNetDevice::FecFlowKeyHash>& flows,
-                uint64_t nowNs,
-                uint64_t idleTimeoutNs)
-{
-    for (auto it = flows.begin(); it != flows.end(); )
-    {
-        QbbNetDevice::FecFlowState& s = it->second;
-        if (s.lastActiveNs != 0 &&
-            nowNs > s.lastActiveNs &&
-            (nowNs - s.lastActiveNs) > idleTimeoutNs &&
-            !s.hasPendingCfg)
-        {
-            bool decoderIdle = (!s.decoder) || s.decoder->IsIdle();
-            bool encoderIdle = (!s.encoder) || !s.encoder->HasData();
-            if (decoderIdle && encoderIdle && s.rxBlockHeaders.empty())
-            {
-                it = flows.erase(it);
-                continue;
-            }
-        }
-        ++it;
-    }
-}
 }  // namespace
 
 // uint32_t RdmaEgressQueue::ack_q_idx = 3; // 3: Middle priority
@@ -680,6 +655,39 @@ QbbNetDevice::GetFecStatistics() const
 }
 
 void
+QbbNetDevice::FecGcFlows(uint64_t nowNs)
+{
+    const uint64_t gcIntervalNs = 1000000ull;   // 1ms
+    const uint64_t idleTimeoutNs = 5000000ull;  // 5ms
+
+    if (nowNs - m_fecLastGcNs <= gcIntervalNs)
+    {
+        return;
+    }
+
+    for (auto it = m_fecFlows.begin(); it != m_fecFlows.end(); )
+    {
+        FecFlowState& s = it->second;
+        if (s.lastActiveNs != 0 &&
+            nowNs > s.lastActiveNs &&
+            (nowNs - s.lastActiveNs) > idleTimeoutNs &&
+            !s.hasPendingCfg)
+        {
+            bool decoderIdle = (!s.decoder) || s.decoder->IsIdle();
+            bool encoderIdle = (!s.encoder) || !s.encoder->HasData();
+            if (decoderIdle && encoderIdle && s.rxBlockHeaders.empty())
+            {
+                it = m_fecFlows.erase(it);
+                continue;
+            }
+        }
+        ++it;
+    }
+
+    m_fecLastGcNs = nowNs;
+}
+
+void
 QbbNetDevice::FecTransmit(Ptr<Packet> packet)
 {
     NS_LOG_FUNCTION(this << packet);
@@ -882,13 +890,7 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     }
 
     // 大规模场景下：周期性回收 idle 的 flow 状态，避免常驻内存持续增长。
-    // 这里用非常轻量的频率（每 1ms 最多触发一次）执行一次全表扫描。
-    static uint64_t s_lastGcNs = 0;
-    if (nowNs - s_lastGcNs > 1000000ull)
-    {
-        FecMaybeGcFlows(m_fecFlows, nowNs, 5000000ull /* 5ms idle */);
-        s_lastGcNs = nowNs;
-    }
+    FecGcFlows(nowNs);
 }
 
 void
@@ -1248,12 +1250,7 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
     }
 
     // 周期性回收 idle flow（仅在接收路径触发也足够）
-    static uint64_t s_lastGcNs = 0;
-    if (nowNs - s_lastGcNs > 1000000ull)
-    {
-        FecMaybeGcFlows(m_fecFlows, nowNs, 5000000ull /* 5ms idle */);
-        s_lastGcNs = nowNs;
-    }
+    FecGcFlows(nowNs);
 }
 
 void
