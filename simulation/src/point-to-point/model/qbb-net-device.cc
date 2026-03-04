@@ -610,6 +610,13 @@ QbbNetDevice::EnableFec(bool enable)
         // Per-flow encoder/decoder 状态按需创建
         m_fecFlows.clear();
         m_fecEnabled = true;
+        m_fecLastGcNs = 0;
+        if (m_fecMaintenanceEvent.IsRunning())
+        {
+            Simulator::Cancel(m_fecMaintenanceEvent);
+        }
+        m_fecMaintenanceEvent =
+            Simulator::Schedule(NanoSeconds(1000000ull /* 1ms */), &QbbNetDevice::FecMaintenanceTick, this);
 
         NS_LOG_INFO("FEC enabled on device with parameters: r=" << m_fecBlockSize
                     << " c=" << m_fecInterleavingDepth);
@@ -617,6 +624,10 @@ QbbNetDevice::EnableFec(bool enable)
     else if (!enable && m_fecEnabled)
     {
         // Disable FEC
+        if (m_fecMaintenanceEvent.IsRunning())
+        {
+            Simulator::Cancel(m_fecMaintenanceEvent);
+        }
         m_fecFlows.clear();
         m_fecEnabled = false;
 
@@ -655,10 +666,27 @@ QbbNetDevice::GetFecStatistics() const
 }
 
 void
+QbbNetDevice::FecMaintenanceTick()
+{
+    if (!m_fecEnabled)
+    {
+        return;
+    }
+
+    uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+    FecGcFlows(nowNs);
+
+    // 周期性维护：确保“流结束后无后续包”时也能触发回收，避免 FEC per-flow 状态常驻导致内存线性增长。
+    m_fecMaintenanceEvent =
+        Simulator::Schedule(NanoSeconds(1000000ull /* 1ms */), &QbbNetDevice::FecMaintenanceTick, this);
+}
+
+void
 QbbNetDevice::FecGcFlows(uint64_t nowNs)
 {
     const uint64_t gcIntervalNs = 1000000ull;   // 1ms
     const uint64_t idleTimeoutNs = 5000000ull;  // 5ms
+    const uint64_t hardIdleTimeoutNs = 50000000ull; // 50ms：兜底防常驻
 
     if (nowNs - m_fecLastGcNs <= gcIntervalNs)
     {
@@ -668,17 +696,46 @@ QbbNetDevice::FecGcFlows(uint64_t nowNs)
     for (auto it = m_fecFlows.begin(); it != m_fecFlows.end(); )
     {
         FecFlowState& s = it->second;
-        if (s.lastActiveNs != 0 &&
-            nowNs > s.lastActiveNs &&
-            (nowNs - s.lastActiveNs) > idleTimeoutNs &&
-            !s.hasPendingCfg)
+        if (s.lastActiveNs != 0 && nowNs > s.lastActiveNs && !s.hasPendingCfg)
         {
-            bool decoderIdle = (!s.decoder) || s.decoder->IsIdle();
-            bool encoderIdle = (!s.encoder) || !s.encoder->HasData();
-            if (decoderIdle && encoderIdle && s.rxBlockHeaders.empty())
+            uint64_t idleNs = nowNs - s.lastActiveNs;
+
+            // LoWAR 对齐：FEC 追求“快速恢复”。对已观测到尾块（flush 后）的 flow，如果在较短窗口内仍无进展，
+            // 直接回收其 FEC 状态，让后续由 RDMA 重传/超时机制接管，避免 decoder/headers 常驻导致内存线性增长。
+            if (s.rxSawTail && s.rxTailSeenNs != 0 && nowNs > s.rxTailSeenNs &&
+                (nowNs - s.rxTailSeenNs) > idleTimeoutNs)
             {
+                if (!m_fecDebugCallback.IsNull())
+                {
+                    uint32_t flowHash = static_cast<uint32_t>(FecFlowKeyHash{}(it->first));
+                    m_fecDebugCallback(m_node->GetId(), 24, flowHash, 1 /*tail_idle_gc*/,
+                                       static_cast<uint32_t>(m_fecFlows.size()), 0);
+                }
                 it = m_fecFlows.erase(it);
                 continue;
+            }
+
+            // 兜底：即使未看到尾块（例如 repair/尾块相关包全丢），也不能无限期保留状态。
+            if (idleNs > hardIdleTimeoutNs)
+            {
+                if (!m_fecDebugCallback.IsNull())
+                {
+                    uint32_t flowHash = static_cast<uint32_t>(FecFlowKeyHash{}(it->first));
+                    m_fecDebugCallback(m_node->GetId(), 24, flowHash, 2 /*hard_idle_gc*/,
+                                       static_cast<uint32_t>(m_fecFlows.size()), 0);
+                }
+                it = m_fecFlows.erase(it);
+                continue;
+            }
+
+            // 普通 idle：encoder 已空时，清掉接收侧 header 缓存，降低常驻内存（decoder 的窗口化清理由接收路径负责）。
+            if (idleNs > idleTimeoutNs)
+            {
+                bool encoderIdle = (!s.encoder) || !s.encoder->HasData();
+                if (encoderIdle)
+                {
+                    s.rxBlockHeaders.clear();
+                }
             }
         }
         ++it;
@@ -1193,6 +1250,10 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
         // LoWAR：当“包含消息尾包”的编码块在 flush 后仍存在未恢复的丢包时，触发一次最小协商请求（提高冗余）
         if (fecHeader.GetHasLast())
         {
+            // 观测到尾块：后续若长时间无进展，应回收该 flow 的 FEC 状态（由周期性 GC 兜底）。
+            flow.rxSawTail = true;
+            flow.rxTailSeenNs = nowNs;
+
             uint32_t missing = 0;
             uint32_t lastRel = fecHeader.GetLastRel();
             for (uint32_t rel = 0; rel <= lastRel; ++rel)
@@ -1213,8 +1274,8 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
 
             if (missing > 0)
             {
-                uint64_t nowNs = Simulator::Now().GetNanoSeconds();
-                if (nowNs - flow.lastNegotiateSentNs > 1000000ull) // 1ms 冷却
+                uint64_t curNs = Simulator::Now().GetNanoSeconds();
+                if (curNs - flow.lastNegotiateSentNs > 1000000ull) // 1ms 冷却
                 {
                     uint32_t curR = flow.cfgBlockSize;
                     uint32_t curC = flow.cfgInterleavingDepth;
@@ -1234,7 +1295,7 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
                                                PackRc(newR, newC), missing);
                         }
                         SendNegotiatePacket(ch, newR, newC, 0 /*request*/);
-                        flow.lastNegotiateSentNs = nowNs;
+                        flow.lastNegotiateSentNs = curNs;
                     }
                 }
             }

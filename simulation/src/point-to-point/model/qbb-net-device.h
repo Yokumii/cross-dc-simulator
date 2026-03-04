@@ -245,6 +245,8 @@ public:
     uint32_t pendingInterleavingDepth = 0;
     bool hasPendingCfg = false;
     uint64_t lastActiveNs = 0;
+    bool rxSawTail = false;
+    uint64_t rxTailSeenNs = 0;
     uint32_t txNextPsn = 0;
     bool txHasBlockHeader = false;
     CustomHeader txBlockHeader;  // CustomHeader from first packet of current FEC block (TX)
@@ -259,8 +261,10 @@ public:
 
   std::unordered_map<FecFlowKey, FecFlowState, FecFlowKeyHash> m_fecFlows;
   uint64_t m_fecLastGcNs = 0;
+  EventId m_fecMaintenanceEvent;
 
   void FecGcFlows(uint64_t nowNs);
+  void FecMaintenanceTick();
 
   // FEC statistics
   uint32_t m_fecEncodedPackets;         ///< Number of data packets encoded
