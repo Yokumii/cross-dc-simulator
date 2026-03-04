@@ -290,6 +290,12 @@ FecDecoder::GetUnrecoverableCount() const
   return m_unrecoverableCount;
 }
 
+bool
+FecDecoder::IsIdle() const
+{
+  return m_reorderBuffer.empty() && m_blockStates.empty() && m_repairBuffer.empty();
+}
+
 Ptr<Packet>
 FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
 {

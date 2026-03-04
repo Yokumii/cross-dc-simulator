@@ -244,6 +244,7 @@ public:
     uint32_t pendingBlockSize = 0;
     uint32_t pendingInterleavingDepth = 0;
     bool hasPendingCfg = false;
+    uint64_t lastActiveNs = 0;
     uint32_t txNextPsn = 0;
     bool txHasBlockHeader = false;
     CustomHeader txBlockHeader;  // CustomHeader from first packet of current FEC block (TX)

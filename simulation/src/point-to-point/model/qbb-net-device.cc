@@ -76,6 +76,31 @@ PackRc(uint32_t r, uint32_t c)
 {
     return (r & 0xFFFFu) | ((c & 0xFFFFu) << 16);
 }
+
+static inline void
+FecMaybeGcFlows(std::unordered_map<FecFlowKey, FecFlowState, FecFlowKeyHash>& flows,
+                uint64_t nowNs,
+                uint64_t idleTimeoutNs)
+{
+    for (auto it = flows.begin(); it != flows.end(); )
+    {
+        FecFlowState& s = it->second;
+        if (s.lastActiveNs != 0 &&
+            nowNs > s.lastActiveNs &&
+            (nowNs - s.lastActiveNs) > idleTimeoutNs &&
+            !s.hasPendingCfg)
+        {
+            bool decoderIdle = (!s.decoder) || s.decoder->IsIdle();
+            bool encoderIdle = (!s.encoder) || !s.encoder->HasData();
+            if (decoderIdle && encoderIdle && s.rxBlockHeaders.empty())
+            {
+                it = flows.erase(it);
+                continue;
+            }
+        }
+        ++it;
+    }
+}
 }  // namespace
 
 // uint32_t RdmaEgressQueue::ack_q_idx = 3; // 3: Middle priority
@@ -682,6 +707,7 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     packet->PeekHeader(peekCh);
     FecFlowKey key{peekCh.sip, peekCh.dip, peekCh.udp.sport, peekCh.udp.dport};
     uint32_t flowHash = static_cast<uint32_t>(FecFlowKeyHash{}(key));
+    uint64_t nowNs = Simulator::Now().GetNanoSeconds();
 
     // LoWAR：消息结束时也应结束本轮编码周期并 flush repair（避免尾块不受保护）
     bool isMsgEnd = false;
@@ -695,6 +721,7 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
     }
 
     FecFlowState& flow = m_fecFlows[key];
+    flow.lastActiveNs = nowNs;
     if (!flow.encoder || !flow.decoder)
     {
         flow.cfgBlockSize = m_fecBlockSize;
@@ -853,6 +880,15 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
         // 直接回收条目可显著降低常驻内存，避免 OOM/SIGKILL。
         m_fecFlows.erase(key);
     }
+
+    // 大规模场景下：周期性回收 idle 的 flow 状态，避免常驻内存持续增长。
+    // 这里用非常轻量的频率（每 1ms 最多触发一次）执行一次全表扫描。
+    static uint64_t s_lastGcNs = 0;
+    if (nowNs - s_lastGcNs > 1000000ull)
+    {
+        FecMaybeGcFlows(m_fecFlows, nowNs, 5000000ull /* 5ms idle */);
+        s_lastGcNs = nowNs;
+    }
 }
 
 void
@@ -882,6 +918,7 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
         FecFlowKey dataKey{ch.dip, ch.sip, ch.udp.dport, ch.udp.sport};
         FecFlowState& f = m_fecFlows[dataKey];
         uint32_t flowHash = static_cast<uint32_t>(FecFlowKeyHash{}(dataKey));
+        f.lastActiveNs = Simulator::Now().GetNanoSeconds();
 
         // 只记录“下一条消息”的参数；实际生效由发送侧在 txNextPsn==0 时应用。
         f.pendingBlockSize = newR;
@@ -900,6 +937,8 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
     FecFlowKey key{ch.sip, ch.dip, ch.udp.sport, ch.udp.dport};
     FecFlowState& flow = m_fecFlows[key];
     uint32_t flowHash = static_cast<uint32_t>(FecFlowKeyHash{}(key));
+    uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+    flow.lastActiveNs = nowNs;
     if (!flow.decoder)
     {
         flow.cfgBlockSize = fecHeader.GetBlockSize();
@@ -1189,6 +1228,14 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
                 }
             }
         }
+    }
+
+    // 周期性回收 idle flow（仅在接收路径触发也足够）
+    static uint64_t s_lastGcNs = 0;
+    if (nowNs - s_lastGcNs > 1000000ull)
+    {
+        FecMaybeGcFlows(m_fecFlows, nowNs, 5000000ull /* 5ms idle */);
+        s_lastGcNs = nowNs;
     }
 }
 

@@ -148,6 +148,13 @@ public:
    */
   uint32_t GetUnrecoverableCount() const;
 
+  /**
+   * \brief Whether decoder has any buffered state
+   *
+   * Used by upper-layer GC to reclaim per-flow decoder state in large simulations.
+   */
+  bool IsIdle() const;
+
 private:
   /**
    * \brief Repair packet information
