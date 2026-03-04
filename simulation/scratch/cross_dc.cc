@@ -153,6 +153,7 @@ uint32_t edge_cnp_interval = 4;
 uint32_t fec_enabled = 0;             // 0: disabled, 1: enabled
 uint32_t fec_block_size = 64;         // r: coding block size (number of packets)
 uint32_t fec_interleaving_depth = 8;  // c: interleaving depth (number of layers)
+uint32_t fec_log_enabled = 1;         // 0: disable FEC debug log file, 1: enable
 
 // Added from Here
 double load = 10.0;
@@ -1222,6 +1223,9 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("FEC_INTERLEAVING_DEPTH") == 0) {
                 conf >> fec_interleaving_depth;
                 std::cerr << "FEC_INTERLEAVING_DEPTH\t\t\t" << fec_interleaving_depth << '\n';
+            } else if (key.compare("FEC_LOG_ENABLED") == 0) {
+                conf >> fec_log_enabled;
+                std::cerr << "FEC_LOG_ENABLED\t\t\t\t" << fec_log_enabled << '\n';
             } else if (key.compare("EDGE_CNP_INTERVAL") == 0) {
                 conf >> edge_cnp_interval;
                 std::cerr << "EDGE_CNP_INTERVAL\t\t\t\t" << edge_cnp_interval << '\n';
@@ -1382,7 +1386,11 @@ int main(int argc, char *argv[]) {
     //
     pfc_file = fopen(pfc_output_file.c_str(), "w");
     FILE* rto_output = fopen(rto_mon_file.c_str(), "w");
-    FILE* fec_output = fopen(fec_mon_file.c_str(), "w");
+    FILE* fec_output = nullptr;
+    if (fec_log_enabled)
+    {
+        fec_output = fopen(fec_mon_file.c_str(), "w");
+    }
     // 统一设置较大的 stdio buffer，显著减少系统调用，避免大规模实验下 IO 抖动影响主机（例如 SSH 卡顿/掉线）。
     if (pfc_file) setvbuf(pfc_file, NULL, _IOFBF, 1 << 20);
     if (rto_output) setvbuf(rto_output, NULL, _IOFBF, 1 << 20);
@@ -1567,8 +1575,15 @@ int main(int argc, char *argv[]) {
                 if (dev) {
                     dev->SetFecParameters(fec_block_size, fec_interleaving_depth);
                     dev->EnableFec(true);
-                    // Setup FEC debug callback
-                    dev->m_fecDebugCallback = MakeBoundCallback(on_fec_debug, fec_output);
+                    // Setup FEC debug callback (optional)
+                    if (fec_log_enabled && fec_output)
+                    {
+                        dev->m_fecDebugCallback = MakeBoundCallback(on_fec_debug, fec_output);
+                    }
+                    else
+                    {
+                        dev->m_fecDebugCallback = QbbNetDevice::FecDebugCallback();
+                    }
                 }
             }
         }

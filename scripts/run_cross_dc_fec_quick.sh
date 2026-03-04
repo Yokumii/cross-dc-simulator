@@ -99,6 +99,10 @@ while [[ $# -gt 0 ]]; do
       FEC_INTERLEAVING_DEPTH="$2"
       shift 2
       ;;
+    --fec-log-enabled)
+      FEC_LOG_ENABLED="$2"
+      shift 2
+      ;;
     -h|--help)
       echo "Usage: $0 [OPTIONS]"
       echo "Options:"
@@ -121,6 +125,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --fec-enabled 0|1              Enable FEC (default: 1)"
       echo "  --fec-block-size SIZE          FEC block size r (default: 64)"
       echo "  --fec-interleaving-depth DEPTH FEC interleaving depth c (default: 8)"
+      echo "  --fec-log-enabled 0|1          Enable FEC log output file (default: 0)"
       echo "  -h, --help                     Show this help message"
       exit 0
       ;;
@@ -180,6 +185,7 @@ fi
 FEC_ENABLED=${FEC_ENABLED:-"1"}
 FEC_BLOCK_SIZE=${FEC_BLOCK_SIZE:-"64"}
 FEC_INTERLEAVING_DEPTH=${FEC_INTERLEAVING_DEPTH:-"8"}
+FEC_LOG_ENABLED=${FEC_LOG_ENABLED:-"0"}
 
 RESULTS_ROOT="${ROOT_DIR}/results"
 SCRIPT_TAG="run_cross_dc_fec_quick"
@@ -191,6 +197,7 @@ cecho "YELLOW" "simul_time=${SIM_TIME}, intra_load=${INTRA_LOAD}, inter_load=${I
 cecho "YELLOW" "intra_error=${INTRA_ERROR}, inter_error=${INTER_ERROR}"
 cecho "YELLOW" "intra_latency=${INTRA_LATENCY}ns, inter_latency=${INTER_LATENCY}ns"
 cecho "YELLOW" "FEC: enabled=${FEC_ENABLED}, block_size=${FEC_BLOCK_SIZE}, depth=${FEC_INTERLEAVING_DEPTH}"
+cecho "YELLOW" "FEC log: enabled=${FEC_LOG_ENABLED}"
 cecho "YELLOW" "topo: k-fat=${K_FAT}, num-dc=${NUM_DC}, bw(intra/inter)=${INTRA_BW}/${INTER_BW}Gbps, flow-scale=${FLOW_SCALE}"
 
 # 记录运行前已有的输出ID
@@ -215,7 +222,8 @@ python3 run_cross_dc.py \
   --inter-latency "${INTER_LATENCY}" \
   --fec-enabled "${FEC_ENABLED}" \
   --fec-block-size "${FEC_BLOCK_SIZE}" \
-  --fec-interleaving-depth "${FEC_INTERLEAVING_DEPTH}"
+  --fec-interleaving-depth "${FEC_INTERLEAVING_DEPTH}" \
+  --fec-log-enabled "${FEC_LOG_ENABLED}"
 
 popd >/dev/null
 

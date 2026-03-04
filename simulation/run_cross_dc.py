@@ -61,6 +61,7 @@ ENABLE_IRN {enabled_irn}
 FEC_ENABLED {fec_enabled}
 FEC_BLOCK_SIZE {fec_block_size}
 FEC_INTERLEAVING_DEPTH {fec_interleaving_depth}
+FEC_LOG_ENABLED {fec_log_enabled}
 
 CONWEAVE_TX_EXPIRY_TIME {cwh_tx_expiry_time}
 CONWEAVE_REPLY_TIMEOUT_EXTRA {cwh_extra_reply_deadline}
@@ -188,6 +189,8 @@ def main():
                       type=int, default=64, help="FEC block size r (default: 64)")
     parser.add_argument('--fec-interleaving-depth', dest='fec_interleaving_depth', action='store',
                       type=int, default=8, help="FEC interleaving depth c (default: 8)")
+    parser.add_argument('--fec-log-enabled', dest='fec_log_enabled', action='store',
+                      type=int, default=1, help="Enable FEC debug log file output (default: 1)")
     parser.add_argument('--dry-run', dest='dry_run', action='store_true',
                       help="Only generate topology/traffic/config then exit (no waf run / analysis)")
     parser.add_argument('--minimal-flows', dest='minimal_flows', action='store',
@@ -484,7 +487,8 @@ def main():
             error_rate_per_link=0.0,
             fec_enabled=args.fec_enabled,
             fec_block_size=args.fec_block_size,
-            fec_interleaving_depth=args.fec_interleaving_depth
+            fec_interleaving_depth=args.fec_interleaving_depth,
+            fec_log_enabled=args.fec_log_enabled
         )
     else:
         print("unknown cc:{}".format(args.cc))
