@@ -1621,7 +1621,8 @@ QbbNetDevice::FecDrainRepairQueue()
         {
             // addBytes = rateBps/8 * deltaNs/1e9，使用 128-bit 避免溢出
             const __int128 numer = static_cast<__int128>(m_fecRepairRateBps) * static_cast<__int128>(deltaNs);
-            const uint64_t addBytes = static_cast<uint64_t>(numer / static_cast<__int128>(8'000'000'000ull));
+            // C++11：不支持数字分隔符（'），用纯数字常量表示 8e9
+            const uint64_t addBytes = static_cast<uint64_t>(numer / static_cast<__int128>(8000000000ull));
             m_fecRepairTokenBytes = std::min<uint64_t>(m_fecRepairBurstBytes, m_fecRepairTokenBytes + addBytes);
         }
         m_fecRepairTokenLastNs = nowNs;
@@ -1677,7 +1678,7 @@ QbbNetDevice::FecDrainRepairQueue()
             if (deficit > 0)
             {
                 // waitNs = deficit * 8e9 / rateBps
-                const __int128 numer = static_cast<__int128>(deficit) * static_cast<__int128>(8'000'000'000ull);
+                const __int128 numer = static_cast<__int128>(deficit) * static_cast<__int128>(8000000000ull);
                 waitNs = static_cast<uint64_t>(numer / static_cast<__int128>(m_fecRepairRateBps));
                 waitNs = std::max<uint64_t>(1, waitNs);
             }
