@@ -181,6 +181,13 @@ RdmaEgressQueue::RdmaEgressQueue() {
     m_ackQ = CreateObject<DropTailQueue>();
     m_ackQ->SetAttribute("MaxBytes",
                          UintegerValue(0xffffffff));  // queue limit is on a higher level, not here
+    m_repairQ.resize(qCnt);
+    for (uint32_t i = 0; i < qCnt; ++i)
+    {
+        m_repairQ[i] = CreateObject<DropTailQueue>();
+        m_repairQ[i]->SetAttribute("MaxBytes",
+                                   UintegerValue(0xffffffff));  // limit is on higher level
+    }
 }
 
 Ptr<Packet> RdmaEgressQueue::DequeueQindex(int qIndex) {
@@ -189,6 +196,17 @@ Ptr<Packet> RdmaEgressQueue::DequeueQindex(int qIndex) {
         m_qlast = -1;
         m_traceRdmaDequeue(p, 0);
         return p;
+    }
+    if (qIndex <= -2 && qIndex >= -static_cast<int>(2 + qCnt - 1)) {  // repair per-PG
+        uint32_t pg = static_cast<uint32_t>(-(qIndex + 2));
+        if (pg < m_repairQ.size() && m_repairQ[pg])
+        {
+            Ptr<Packet> p = m_repairQ[pg]->Dequeue();
+            m_qlast = qIndex;
+            m_traceRdmaDequeue(p, pg);
+            return p;
+        }
+        return 0;
     }
     if (qIndex >= 0) {  // qp
         Ptr<Packet> p = m_rdmaGetNxtPkt(m_qpGrp->Get(qIndex));
@@ -200,12 +218,25 @@ Ptr<Packet> RdmaEgressQueue::DequeueQindex(int qIndex) {
     return 0;
 }
 int RdmaEgressQueue::GetNextQindex(bool paused[]) {
-    bool found = false;
-    uint32_t qIndex;
     if (!paused[ack_q_idx] && m_ackQ->GetNPackets() > 0) return -1;
+
+    // Repair packets: choose a non-paused PG queue (round-robin) so repairs do not bypass PFC.
+    if (!m_repairQ.empty())
+    {
+        for (uint32_t off = 1; off <= qCnt; ++off)
+        {
+            uint32_t pg = (m_repairRrlast + off) % qCnt;
+            if (!paused[pg] && m_repairQ[pg] && m_repairQ[pg]->GetNPackets() > 0)
+            {
+                m_repairRrlast = pg;
+                return -static_cast<int>(2 + pg);  // -2..-(2+qCnt-1)
+            }
+        }
+    }
 
     // no pkt in highest priority queue, do rr for each qp
     uint32_t fcount = m_qpGrp->GetN();
+    uint32_t qIndex;
     for (qIndex = 1; qIndex <= fcount; qIndex++) {
         if (m_qpGrp->IsQpFinished((qIndex + m_rrlast) % fcount)) continue;
         Ptr<RdmaQueuePair> qp = m_qpGrp->Get((qIndex + m_rrlast) % fcount);
@@ -270,6 +301,17 @@ void RdmaEgressQueue::RecoverQueue(uint32_t i) {
 void RdmaEgressQueue::EnqueueHighPrioQ(Ptr<Packet> p) {
     m_traceRdmaEnqueue(p, 0);
     m_ackQ->Enqueue(p);
+}
+
+void RdmaEgressQueue::EnqueueRepairQ(Ptr<Packet> p, uint32_t pg)
+{
+    uint32_t idx = (pg < qCnt) ? pg : 0;
+    if (idx >= m_repairQ.size() || !m_repairQ[idx])
+    {
+        return;
+    }
+    m_traceRdmaEnqueue(p, idx);
+    m_repairQ[idx]->Enqueue(p);
 }
 
 void RdmaEgressQueue::CleanHighPrio(TracedCallback<Ptr<const Packet>, uint32_t> dropCb) {
@@ -370,6 +412,13 @@ void QbbNetDevice::DequeueAndTransmit(void) {
             if (qIndex == -1) {  // high prio
                 p = m_rdmaEQ->DequeueQindex(qIndex);
                 m_traceDequeue(p, 0);
+                TransmitStart(p);
+                return;
+            }
+            if (qIndex <= -2 && qIndex >= -static_cast<int>(2 + RdmaEgressQueue::qCnt - 1)) {  // repair per-PG
+                uint32_t pg = static_cast<uint32_t>(-(qIndex + 2));
+                p = m_rdmaEQ->DequeueQindex(qIndex);
+                m_traceDequeue(p, pg);
                 TransmitStart(p);
                 return;
             }
@@ -1518,11 +1567,13 @@ QbbNetDevice::SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets, c
                   << " sip=" << ch.sip << " dip=" << ch.dip);
 
         // Enqueue repair packet for transmission
-        // Use high priority queue (index 0) for repair packets to minimize delay
+        // Repair packets MUST respect PFC pause classes; do not enqueue into ackQ (qIndex=0),
+        // otherwise they can bypass PAUSE and cause queue/MMU/memory blow-up in large runs.
         if (m_node->GetNodeType() == 0)  // server
         {
-            m_rdmaEQ->EnqueueHighPrioQ(repairPkt);
-            m_traceEnqueue(repairPkt, 0);
+            uint32_t pg = (ch.udp.pg < RdmaEgressQueue::qCnt) ? ch.udp.pg : 0;
+            m_rdmaEQ->EnqueueRepairQ(repairPkt, pg);
+            m_traceEnqueue(repairPkt, pg);
             
             // Removed: repair packet sent event (event_type=1) - using debug callback only
             // if (!m_fecEventCallback.IsNull()) {

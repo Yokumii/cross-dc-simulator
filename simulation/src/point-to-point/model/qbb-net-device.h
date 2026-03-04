@@ -48,6 +48,9 @@ public:
 	int m_qlast;
 	uint32_t m_rrlast;
 	Ptr<DropTailQueue> m_ackQ; // highest priority queue
+	// FEC repair packets must NOT bypass PFC; keep them in per-PG queues that respect pause classes.
+	std::vector<Ptr<DropTailQueue> > m_repairQ; // size=qCnt
+	uint32_t m_repairRrlast{0};
 	Ptr<RdmaQueuePairGroup> m_qpGrp; // queue pairs
 	std::unordered_map<int32_t, Time> current_pause_time;
 
@@ -65,6 +68,7 @@ public:
 	Ptr<RdmaQueuePair> GetQp(uint32_t i);
 	void RecoverQueue(uint32_t i);
 	void EnqueueHighPrioQ(Ptr<Packet> p);
+	void EnqueueRepairQ(Ptr<Packet> p, uint32_t pg);
 	void CleanHighPrio(TracedCallback<Ptr<const Packet>, uint32_t> dropCb);
 
 	TracedCallback<Ptr<const Packet>, uint32_t> m_traceRdmaEnqueue;
