@@ -61,6 +61,10 @@ while [[ $# -gt 0 ]]; do
       INTER_LATENCY="$2"
       shift 2
       ;;
+    --fec-enabled)
+      FEC_ENABLED="$2"
+      shift 2
+      ;;
     -h|--help)
       echo "Usage: $0 [OPTIONS]"
       echo "Options:"
@@ -76,6 +80,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --inter-error RATE    Inter-DC link error rate (default: 0.0)"
       echo "  --intra-latency NS    Intra-DC link latency in ns (default: 1000 - 1us)"
       echo "  --inter-latency NS    Inter-DC link latency in ns (default: 400000 - 400us)"
+      echo "  --fec-enabled 0|1     Enable FEC (default: 0)"
       echo "  -h, --help            Show this help message"
       exit 0
       ;;
@@ -100,13 +105,14 @@ INTRA_ERROR=${INTRA_ERROR:-"0.0"}
 INTER_ERROR=${INTER_ERROR:-"0.05"}
 INTRA_LATENCY=${INTRA_LATENCY:-"1000"}
 INTER_LATENCY=${INTER_LATENCY:-"400000"}
+FEC_ENABLED=${FEC_ENABLED:-"0"}
 
 RESULTS_ROOT="${ROOT_DIR}/results"
 SCRIPT_TAG="run_cross_dc_quick"
 RUN_DIR="${RESULTS_ROOT}/${SCRIPT_TAG}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "${RUN_DIR}"
 
-cecho "GREEN" "Running lossy cross-dc simulation (PFC off, IRN on)"
+cecho "GREEN" "Running lossy cross-dc simulation (PFC off, IRN on, FEC=${FEC_ENABLED})"
 cecho "YELLOW" "simul_time=${SIM_TIME}, intra_load=${INTRA_LOAD}, inter_load=${INTER_LOAD}"
 cecho "YELLOW" "intra_error=${INTRA_ERROR}, inter_error=${INTER_ERROR}"
 cecho "YELLOW" "intra_latency=${INTRA_LATENCY}ns, inter_latency=${INTER_LATENCY}ns"
@@ -119,6 +125,7 @@ pushd "${SIM_DIR}" >/dev/null
 python3 run_cross_dc.py \
   --pfc 0 \
   --irn 1 \
+  --fec-enabled "${FEC_ENABLED}" \
   --simul_time "${SIM_TIME}" \
   --intra-load "${INTRA_LOAD}" \
   --inter-load "${INTER_LOAD}" \
