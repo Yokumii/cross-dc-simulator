@@ -609,6 +609,7 @@ QbbNetDevice::EnableFec(bool enable)
     {
         // Per-flow encoder/decoder 状态按需创建
         m_fecFlows.clear();
+        m_fecPendingCfgs.clear();
         m_fecEnabled = true;
         m_fecLastGcNs = 0;
         if (m_fecMaintenanceEvent.IsRunning())
@@ -629,6 +630,7 @@ QbbNetDevice::EnableFec(bool enable)
             Simulator::Cancel(m_fecMaintenanceEvent);
         }
         m_fecFlows.clear();
+        m_fecPendingCfgs.clear();
         m_fecEnabled = false;
 
         NS_LOG_INFO("FEC disabled on device");
@@ -649,6 +651,7 @@ QbbNetDevice::SetFecParameters(uint32_t blockSize, uint32_t interleavingDepth)
     m_fecBlockSize = blockSize;
     m_fecInterleavingDepth = interleavingDepth;
     m_fecFlows.clear();
+    m_fecPendingCfgs.clear();
 
     NS_LOG_INFO("FEC parameters set: r=" << m_fecBlockSize
                 << " c=" << m_fecInterleavingDepth);
@@ -706,16 +709,33 @@ QbbNetDevice::FecGcFlows(uint64_t nowNs)
     const uint64_t gcIntervalNs = 1000000ull;   // 1ms
     const uint64_t idleTimeoutNs = 5000000ull;  // 5ms
     const uint64_t hardIdleTimeoutNs = 50000000ull; // 50ms：兜底防常驻
+    const uint64_t pendingCfgTtlNs = 50000000ull; // 50ms：协商待生效参数 TTL
 
     if (nowNs - m_fecLastGcNs <= gcIntervalNs)
     {
         return;
     }
 
+    // 清理过期的 pending cfg，避免协商包在“无后续消息”时制造常驻状态
+    if (!m_fecPendingCfgs.empty())
+    {
+        for (auto it = m_fecPendingCfgs.begin(); it != m_fecPendingCfgs.end(); )
+        {
+            if (it->second.updatedNs != 0 &&
+                nowNs > it->second.updatedNs &&
+                (nowNs - it->second.updatedNs) > pendingCfgTtlNs)
+            {
+                it = m_fecPendingCfgs.erase(it);
+                continue;
+            }
+            ++it;
+        }
+    }
+
     for (auto it = m_fecFlows.begin(); it != m_fecFlows.end(); )
     {
         FecFlowState& s = it->second;
-        if (s.lastActiveNs != 0 && nowNs > s.lastActiveNs && !s.hasPendingCfg)
+        if (s.lastActiveNs != 0 && nowNs > s.lastActiveNs)
         {
             uint64_t idleNs = nowNs - s.lastActiveNs;
 
@@ -819,24 +839,29 @@ QbbNetDevice::FecTransmit(Ptr<Packet> packet)
 
     // LoWAR 参数协商：把协商得到的新 (r,c) 延迟到“下一条消息开始”（txNextPsn==0）再生效，
     // 避免中途切参导致编码/解码不一致。
-    if (flow.txNextPsn == 0 && flow.hasPendingCfg)
+    if (flow.txNextPsn == 0)
     {
-        uint32_t oldR = flow.cfgBlockSize;
-        uint32_t oldC = flow.cfgInterleavingDepth;
-        flow.cfgBlockSize = flow.pendingBlockSize;
-        flow.cfgInterleavingDepth = flow.pendingInterleavingDepth;
-        flow.hasPendingCfg = false;
-
-        flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
-        flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
-        flow.txHasBlockHeader = false;
-        flow.rxBlockHeaders.clear();
-
-        // Debug callback: log_type=22 (negotiate_apply_tx), param0=flowHash, param1=old(r,c), param2=new(r,c)
-        if (!m_fecDebugCallback.IsNull())
+        auto itPending = m_fecPendingCfgs.find(key);
+        if (itPending != m_fecPendingCfgs.end())
         {
-            m_fecDebugCallback(m_node->GetId(), 22, flowHash, PackRc(oldR, oldC),
-                               PackRc(flow.cfgBlockSize, flow.cfgInterleavingDepth), 0);
+            // 仅对“下一条消息”生效；一旦应用就清掉 pending，避免常驻。
+            uint32_t oldR = flow.cfgBlockSize;
+            uint32_t oldC = flow.cfgInterleavingDepth;
+            flow.cfgBlockSize = itPending->second.blockSize;
+            flow.cfgInterleavingDepth = itPending->second.interleavingDepth;
+            m_fecPendingCfgs.erase(itPending);
+
+            flow.encoder = Ptr<FecEncoder>(new FecEncoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
+            flow.decoder = Ptr<FecDecoder>(new FecDecoder(flow.cfgBlockSize, flow.cfgInterleavingDepth));
+            flow.txHasBlockHeader = false;
+            flow.rxBlockHeaders.clear();
+
+            // Debug callback: log_type=22 (negotiate_apply_tx), param0=flowHash, param1=old(r,c), param2=new(r,c)
+            if (!m_fecDebugCallback.IsNull())
+            {
+                m_fecDebugCallback(m_node->GetId(), 22, flowHash, PackRc(oldR, oldC),
+                                   PackRc(flow.cfgBlockSize, flow.cfgInterleavingDepth), 0);
+            }
         }
     }
 
@@ -994,14 +1019,15 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
 
         // Map reversed direction back to the data-flow key
         FecFlowKey dataKey{ch.dip, ch.sip, ch.udp.dport, ch.udp.sport};
-        FecFlowState& f = m_fecFlows[dataKey];
         uint32_t flowHash = static_cast<uint32_t>(FecFlowKeyHash{}(dataKey));
-        f.lastActiveNs = Simulator::Now().GetNanoSeconds();
+        uint64_t nowNs = Simulator::Now().GetNanoSeconds();
 
-        // 只记录“下一条消息”的参数；实际生效由发送侧在 txNextPsn==0 时应用。
-        f.pendingBlockSize = newR;
-        f.pendingInterleavingDepth = newC;
-        f.hasPendingCfg = true;
+        // 只记录“下一条消息”的参数；不要在这里创建/复活 m_fecFlows 条目，否则在“无后续消息”的场景会制造常驻内存。
+        FecPendingCfg& pending = m_fecPendingCfgs[dataKey];
+        pending.blockSize = newR;
+        pending.interleavingDepth = newC;
+        pending.updatedNs = nowNs;
+        pending.negOp = negOp;
 
         // Debug callback: log_type=21 (negotiate_recv), param0=flowHash, param1=new(r,c), param2=negOp
         if (!m_fecDebugCallback.IsNull())

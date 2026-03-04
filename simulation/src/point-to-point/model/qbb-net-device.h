@@ -241,9 +241,6 @@ public:
   {
     uint32_t cfgBlockSize = 0;
     uint32_t cfgInterleavingDepth = 0;
-    uint32_t pendingBlockSize = 0;
-    uint32_t pendingInterleavingDepth = 0;
-    bool hasPendingCfg = false;
     uint64_t lastActiveNs = 0;
     bool rxSawTail = false;
     uint64_t rxTailSeenNs = 0;
@@ -259,7 +256,16 @@ public:
     uint64_t lastNegotiateSentNs = 0;
   };
 
+  struct FecPendingCfg
+  {
+    uint32_t blockSize = 0;
+    uint32_t interleavingDepth = 0;
+    uint64_t updatedNs = 0;
+    uint16_t negOp = 0;
+  };
+
   std::unordered_map<FecFlowKey, FecFlowState, FecFlowKeyHash> m_fecFlows;
+  std::unordered_map<FecFlowKey, FecPendingCfg, FecFlowKeyHash> m_fecPendingCfgs;
   uint64_t m_fecLastGcNs = 0;
   EventId m_fecMaintenanceEvent;
 
