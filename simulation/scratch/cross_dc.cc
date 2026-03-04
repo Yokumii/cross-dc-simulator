@@ -661,6 +661,8 @@ void fec_state_monitoring(FILE* fout, NodeContainer* n, uint32_t intervalNs)
     uint64_t blocks = 0;
     uint64_t repairs = 0;
     uint64_t xorBytes = 0;
+    uint64_t ackqPkts = 0;
+    uint64_t ackqBytes = 0;
 
     for (uint32_t i = 0; i < n->GetN(); ++i)
     {
@@ -678,18 +680,27 @@ void fec_state_monitoring(FILE* fout, NodeContainer* n, uint32_t intervalNs)
             blocks += s.totalDecoderBlocks;
             repairs += s.totalDecoderRepairs;
             xorBytes += s.totalDecoderXorBytes;
+
+            Ptr<RdmaEgressQueue> eq = dev->GetRdmaQueue();
+            if (eq && eq->m_ackQ)
+            {
+                ackqPkts += eq->m_ackQ->GetNPackets();
+                ackqBytes += eq->m_ackQ->GetNBytes();
+            }
         }
     }
 
     uint64_t rssKb = ReadSelfRssKb();
-    fprintf(fout, "%lu rss_kb=%lu flows=%lu headers=%lu blocks=%lu repairs=%lu xor_bytes=%lu\n",
+    fprintf(fout, "%lu rss_kb=%lu flows=%lu headers=%lu blocks=%lu repairs=%lu xor_bytes=%lu ackq_pkts=%lu ackq_bytes=%lu\n",
             (unsigned long)Simulator::Now().GetNanoSeconds(),
             (unsigned long)rssKb,
             (unsigned long)flows,
             (unsigned long)headers,
             (unsigned long)blocks,
             (unsigned long)repairs,
-            (unsigned long)xorBytes);
+            (unsigned long)xorBytes,
+            (unsigned long)ackqPkts,
+            (unsigned long)ackqBytes);
     fflush(fout);
 
     Simulator::Schedule(NanoSeconds(intervalNs), &fec_state_monitoring, fout, n, intervalNs);
