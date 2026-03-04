@@ -78,13 +78,13 @@ PackRc(uint32_t r, uint32_t c)
 }
 
 static inline void
-FecMaybeGcFlows(std::unordered_map<FecFlowKey, FecFlowState, FecFlowKeyHash>& flows,
+FecMaybeGcFlows(std::unordered_map<QbbNetDevice::FecFlowKey, QbbNetDevice::FecFlowState, QbbNetDevice::FecFlowKeyHash>& flows,
                 uint64_t nowNs,
                 uint64_t idleTimeoutNs)
 {
     for (auto it = flows.begin(); it != flows.end(); )
     {
-        FecFlowState& s = it->second;
+        QbbNetDevice::FecFlowState& s = it->second;
         if (s.lastActiveNs != 0 &&
             nowNs > s.lastActiveNs &&
             (nowNs - s.lastActiveNs) > idleTimeoutNs &&
