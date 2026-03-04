@@ -312,7 +312,13 @@ void cnp_freq_monitoring(FILE *fout, Ptr<RdmaHw> rdmahw) {
         // flush
         fprintf(fout, "%lu %u %u %u %u\n", Simulator::Now().GetNanoSeconds(),
                 rdmahw->m_node->GetId(), rdmahw->cnp_by_ecn, rdmahw->cnp_by_ooo, rdmahw->cnp_total);
-        fflush(fout);
+        // 大规模场景下逐行 fflush 会产生较高 IO 开销；这里做轻量节流。
+        static uint32_t s_cnp_lines = 0;
+        s_cnp_lines++;
+        if ((s_cnp_lines & 0xFFu) == 0)
+        {
+            fflush(fout);
+        }
 
         // initialize
         rdmahw->cnp_by_ecn = 0;
@@ -561,7 +567,13 @@ void on_rto_timeout(FILE *fout, uint32_t nodeId, Ptr<RdmaQueuePair> qp, Time rto
             (unsigned long)qp->snd_nxt,
             (unsigned long)rto.GetNanoSeconds(),
             timeoutCount);
-    fflush(fout);
+    // 大规模场景下逐行 fflush 会产生较高 IO 开销；这里做轻量节流。
+    static uint32_t s_rto_lines = 0;
+    s_rto_lines++;
+    if ((s_rto_lines & 0x3FFu) == 0)
+    {
+        fflush(fout);
+    }
 }
 
 /**
@@ -637,7 +649,13 @@ void on_sw_admission_drop(FILE *fout, Ptr<QbbNetDevice> swDev, Ptr<const Packet>
             (unsigned long)Simulator::Now().GetNanoSeconds(),
             (int)type, nodeId, ifIndex,
             srcId, dstId, sport, dport);
-    fflush(fout);
+    // 大规模场景下逐行 fflush 会产生较高 IO 开销；这里做轻量节流。
+    static uint32_t s_drop_lines = 0;
+    s_drop_lines++;
+    if ((s_drop_lines & 0x3FFu) == 0)
+    {
+        fflush(fout);
+    }
 }
 
 /*******************************************************************/
@@ -1365,6 +1383,10 @@ int main(int argc, char *argv[]) {
     pfc_file = fopen(pfc_output_file.c_str(), "w");
     FILE* rto_output = fopen(rto_mon_file.c_str(), "w");
     FILE* fec_output = fopen(fec_mon_file.c_str(), "w");
+    // 统一设置较大的 stdio buffer，显著减少系统调用，避免大规模实验下 IO 抖动影响主机（例如 SSH 卡顿/掉线）。
+    if (pfc_file) setvbuf(pfc_file, NULL, _IOFBF, 1 << 20);
+    if (rto_output) setvbuf(rto_output, NULL, _IOFBF, 1 << 20);
+    if (fec_output) setvbuf(fec_output, NULL, _IOFBF, 1 << 20);
 
     QbbHelper qbb;
     Ipv4AddressHelper ipv4;
@@ -1558,6 +1580,9 @@ int main(int argc, char *argv[]) {
     if (cc_mode == 1) {
         cnp_output = fopen(cnp_output_file.c_str(), "w");
     }
+    if (fct_output) setvbuf(fct_output, NULL, _IOFBF, 1 << 20);
+    if (flow_input_stream) setvbuf(flow_input_stream, NULL, _IOFBF, 1 << 20);
+    if (cnp_output) setvbuf(cnp_output, NULL, _IOFBF, 1 << 20);
 
     /**
      * @brief install RDMA driver (Mellanox parameters)
