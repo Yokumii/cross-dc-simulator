@@ -98,6 +98,12 @@ FEC 相关参数：
 - `--fec-enabled`: 是否启用 FEC（默认：1，启用）
 - `--fec-block-size`: FEC 块大小 r（默认：64）
 - `--fec-interleaving-depth`: FEC 交织深度 c（默认：8）
+- `--fec-tail-flush-min-pkts`: 尾块 flush 最小数据包数（默认：8；更短的尾块不注入 repair，交给重传）
+- `--fec-max-repairs-per-block`: 每块最多 repair 数（默认：0 不限制；用于压低额外注入开销）
+- `--fec-repair-pacing-enabled`: 是否启用 repair 注入 pacing（默认：1）
+- `--fec-repair-rate-ratio`: repair 注入速率比例（默认：0 自动按 `c/r`；值越大注入越快）
+- `--fec-repair-burst-bytes`: repair token-bucket burst（默认：65536）
+- `--fec-repair-max-backlog-bytes`: pending repair backlog 上限（默认：8MiB；超过直接丢 repair，best-effort）
 
 示例：
 ```shell
@@ -207,6 +213,7 @@ python3 ../tools/traffic_gen/cross_dc_traffic_gen.py \
 本项目实现了一套面向跨数据中心（lossy WAN）场景的透明 FEC 机制，参考 LoWAR 思路做了两点关键工程化对齐：
 
 - **消息感知（message-aware）**：在“消息结束”时对尾块执行 flush，避免尾块不受保护。
+- **repair 注入节流（best-effort pacing）**：repair 通过 token-bucket 分批注入，且支持 backlog 上限；拥塞时少发/不发 repair，交给 RDMA 重传/超时接管，避免修复包把队列打爆。
 - **运行期可观测与可控**：提供可选的 FEC 日志与状态监控，便于定位内存/排队问题。
 
 > 实现位置：`simulation/src/point-to-point/model/qbb-net-device.*`、`fec-encoder.*`、`fec-decoder.*`、`fec-header.*`。
@@ -227,14 +234,14 @@ python3 ../tools/traffic_gen/cross_dc_traffic_gen.py \
      - `recipe`：参与 XOR 的数据包 PSN 列表（用于恢复）
 
 3. **修复包生成**：
-   - 当编码块填满（收到 `r` 个数据包）时，最多生成 `c` 个修复包（每个 coding unit 一个）
+   - 当编码块填满（收到 `r` 个数据包）时，最多生成 `c` 个修复包（每个 coding unit 一个）；可通过 `--fec-max-repairs-per-block` 限制实际注入数量
    - 每个修复包是其所在 coding unit 的 XOR 结果（一个 unit 最多生成一个 repair）
    - 修复包包含：
      - 类型标识（REPAIR）
      - 基序列号（bPSN）
      - 交织序列号（ISN，标识修复包所属 unit）
      - 配方（Recipe）：参与 XOR 的数据包 PSN 列表
-   - **尾块 flush**：若消息结束但当前块未满 `r`，仍会生成 repair（携带尾块边界元信息），避免尾块完全依赖重传
+   - **尾块 flush**：若消息结束但当前块未满 `r`，仍会生成 repair（携带尾块边界元信息）；但当尾块数据包数 < `--fec-tail-flush-min-pkts` 时默认不注入 repair（短流/短尾块更适合重传）
 
 4. **包头格式**：
    ```
@@ -306,19 +313,43 @@ python3 ../tools/traffic_gen/cross_dc_traffic_gen.py \
 
 #### 部分仿真结果
 
-**FEC 对 FCT 的改善效果：**
+**实验设置**：
+- 拓扑：`cross_dc_k4_dc2_os2_*`（intra 100Gbps/1us，inter 400Gbps/400us）
+- 流量：mixed
+- FEC：`r=64, c=8`，仅对 inter-DC 流启用；repair 注入采用 pacing + backlog 上限
 
-![](https://webp-pic.yokumi.cn/2025/11/20251130135215280.png)
+**关键结论**：
 
-在较大的 Inter-DC 链路丢包率下，启用 FEC 对 FCT 有一定的改善效果。
+对于跨数据中心流（inter-DC）：
 
-**启用 FEC 对 RTO 依赖的改善效果：**
+- 在较低丢包率 `1e-4`：FEC 主要表现为“冗余开销”，inter-DC 反而变差（平均 FCT **+33.1%**，p99 FCT **+24.9%**，timeouts_total **+40.7%**）。
+- 在中等丢包率 `1e-3`：FEC 对 inter-DC FCT 有收益（平均 FCT **-11.6%**，p99 FCT **-6.7%**），但 timeouts_total 上升（**+33.2%**）。
+- 在较高丢包率 `1e-2`：FEC 同时改善 inter-DC FCT 与 timeouts_total（平均 FCT **-11.4%**，p99 FCT **-3.9%**，timeouts_total **-31.9%**）。
 
-在 Inter-DC 链路丢包率为 1% 时，启用 FEC 时对 RTO 超时次数的改善效果高达 43%。
+对于数据中心内流（intra-DC）：
+- 本组设置下 intra-DC p99 基本不变；平均值有小幅波动（`1e-3` 时降低、`1e-4/1e-2` 时略升），反映“repair 额外注入”对共享队列/调度的间接影响，但主要收益仍集中在 inter-DC。
 
-**启用 FEC 对网络拥塞的影响：**
+**汇总表**：
 
-由于 FEC 会额外注入 repair，若不做节流/背压对齐，可能加重排队与拥塞；建议结合状态监控指标评估（尤其是 `beq_pkts/sw_mmu_used`）。
+| inter-DC error | inter avg FCT Δ | inter p99 FCT Δ | inter timeouts_total Δ | intra avg FCT Δ | sw_mmu_used_peak Δ | pending_repair_bytes_peak (with FEC) |
+|---:|---:|---:|---:|---:|---:|---:|
+| `1e-4` | +33.1% | +24.9% | +40.7% | +11.1% | +20.3% | 560,276 |
+| `1e-3` | -11.6% | -6.7% | +33.2% | -15.2% | +7.6% | 3,566,496 |
+| `1e-2` | -11.4% | -3.9% | -31.9% | +5.1% | +1.7% | 16,055,850 |
+
+- 说明：下图展示的是 **slowdown 分布**（`fct / standalone_fct`），用于观察“不同流大小”的相对收益；上面的汇总表则是 **FCT（ns）** 的均值/分位统计。
+
+![err=1e-4（inter-DC，avg slowdown）](https://webp-pic.yokumi.cn/2026/03/20260305100320939.png)
+
+![err=1e-2（inter-DC，p99 slowdown）](https://webp-pic.yokumi.cn/2026/03/20260305100454504.png)
+
+**开销/拥塞观测（峰值）**
+- `sw_mmu_used` 峰值随 FEC 上升（冗余注入的可预期开销），但在本组参数下未触发 repair 丢弃。
+- `pending_repair_bytes_peak` 随丢包率增大而上升，说明 pacing/backlog 机制在工作（修复包不会瞬间全量注入）。
+
+![](https://webp-pic.yokumi.cn/2026/03/20260305100529467.png)
+
+![](https://webp-pic.yokumi.cn/2026/03/20260305100538531.png)
 
 ### EdgeCNP（边缘拥塞通知）实现机制
 
