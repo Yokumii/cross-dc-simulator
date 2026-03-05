@@ -30,6 +30,7 @@
 #include <fstream>
 #include <iostream>
 #include <unordered_map>
+#include <unistd.h>
 
 #include "ns3/applications-module.h"
 #include "ns3/broadcom-node.h"
@@ -153,6 +154,16 @@ uint32_t edge_cnp_interval = 4;
 uint32_t fec_enabled = 0;             // 0: disabled, 1: enabled
 uint32_t fec_block_size = 64;         // r: coding block size (number of packets)
 uint32_t fec_interleaving_depth = 8;  // c: interleaving depth (number of layers)
+uint32_t fec_tail_flush_min_pkts = 8; // 尾块 flush 最小数据包数（短尾块不注入 repair）
+uint32_t fec_max_repairs_per_block = 0; // 每块最多 repair 数（0 表示不限制）
+uint32_t fec_repair_pacing_enabled = 1; // repair 注入 pacing（LoWAR 风格 best-effort）
+double fec_repair_rate_ratio = 0.0;     // repair 注入速率比例（0 表示按 c/r 自动）
+uint64_t fec_repair_burst_bytes = 65536; // token bucket burst
+uint64_t fec_repair_max_backlog_bytes = 8ull * 1024 * 1024; // pending repair backlog 上限
+uint32_t fec_log_enabled = 1;         // 0: disable FEC debug log file, 1: enable
+uint32_t fec_state_mon_enabled = 0;   // 0: disable, 1: enable
+uint32_t fec_state_mon_interval_ns = 10000000; // default 10ms
+std::string fec_state_mon_file;
 
 // Added from Here
 double load = 10.0;
@@ -312,7 +323,13 @@ void cnp_freq_monitoring(FILE *fout, Ptr<RdmaHw> rdmahw) {
         // flush
         fprintf(fout, "%lu %u %u %u %u\n", Simulator::Now().GetNanoSeconds(),
                 rdmahw->m_node->GetId(), rdmahw->cnp_by_ecn, rdmahw->cnp_by_ooo, rdmahw->cnp_total);
-        fflush(fout);
+        // 大规模场景下逐行 fflush 会产生较高 IO 开销；这里做轻量节流。
+        static uint32_t s_cnp_lines = 0;
+        s_cnp_lines++;
+        if ((s_cnp_lines & 0xFFu) == 0)
+        {
+            fflush(fout);
+        }
 
         // initialize
         rdmahw->cnp_by_ecn = 0;
@@ -549,6 +566,14 @@ void on_phy_drop(FILE *fout, Ptr<QbbNetDevice> dev, Ptr<const Packet> pkt) {
  */
 void on_rto_timeout(FILE *fout, uint32_t nodeId, Ptr<RdmaQueuePair> qp, Time rto, uint32_t timeoutCount) {
     if (!fout || !qp) return;
+    // RTO 事件在丢包/高负载下可能非常密集，默认采样以避免日志与 IO 成为瓶颈（影响宿主机稳定性/SSH）。
+    // 仅保留 1/256 的事件用于趋势观察；如需全量，可把该采样逻辑去掉或改小采样率。
+    static uint32_t s_rto_sample = 0;
+    s_rto_sample++;
+    if ((s_rto_sample & 0xFFu) != 0)
+    {
+        return;
+    }
     uint32_t srcId = Settings::ip_to_node_id(qp->sip);
     uint32_t dstId = Settings::ip_to_node_id(qp->dip);
     fprintf(fout, "%lu %u %d %u %u %u %u %lu %lu %lu %u\n",
@@ -561,23 +586,165 @@ void on_rto_timeout(FILE *fout, uint32_t nodeId, Ptr<RdmaQueuePair> qp, Time rto
             (unsigned long)qp->snd_nxt,
             (unsigned long)rto.GetNanoSeconds(),
             timeoutCount);
-    fflush(fout);
+    // 大规模场景下逐行 fflush 会产生较高 IO 开销；这里做轻量节流。
+    static uint32_t s_rto_lines = 0;
+    s_rto_lines++;
+    if ((s_rto_lines & 0x3FFu) == 0)
+    {
+        fflush(fout);
+    }
 }
 
 /**
  * @brief FEC debug logging - detailed decode operations
- * log_type: 0=data_recv, 1=repair_recv, 2=recovery_attempt, 3=recovery_result
- * Format: time_ns node_id log_type psn/isn param1 param2 param3
+ * Format: time_ns node_id log_type param0 param1 param2 param3
+ *
+ * 基础事件（兼容老解析）：
+ * - 0=data_recv:        param0=psn, param1=basePSN, param2=flowHash, param3=pack(r,c)
+ * - 1=repair_recv:      param0=isn, param1=basePSN, param2=recipe_size, param3=flowHash
+ * - 2=recovery_attempt: param0=isn, param1=basePSN, param2=flowHash, param3=0
+ * - 3=recovery_result:  param0=isn, param1=recovered_cnt, param2=flowHash, param3=basePSN
+ *
+ * 扩展事件（LoWAR 对齐）：
+ * - 4=tail_flush:       param0=flowHash, param1=basePSN, param2=tail_data_cnt, param3=repair_cnt
+ * - 20=negotiate_req:   param0=flowHash, param1=pack(cur_r,cur_c), param2=pack(new_r,new_c), param3=missing_cnt
+ * - 21=negotiate_recv:  param0=flowHash, param1=pack(new_r,new_c), param2=neg_op(0=req,1=ack), param3=0
+ * - 22=negotiate_apply: param0=flowHash, param1=pack(old_r,old_c), param2=pack(new_r,new_c), param3=0
+ * - 23=param_switch_rx: param0=flowHash, param1=pack(old_r,old_c), param2=pack(new_r,new_c), param3=0(data)/1(repair)
+ *
+ * pack(r,c) := (r & 0xFFFF) | ((c & 0xFFFF) << 16)
  */
 void on_fec_debug(FILE *fout, uint32_t nodeId, uint32_t logType,
                   uint32_t param0, uint32_t param1, uint32_t param2, uint32_t param3) {
     if (!fout) return;
+
+    // data_recv 事件量极大（每个数据包一条），大规模实验会引发 IO 爆炸并拖垮宿主机（SSH 卡顿/掉线）。
+    // 默认关闭 logType==0；建议只用 repair/negotiate/recovery/tail_flush 事件做 FEC 观测。
+    if (logType == 0) return;
+
     fprintf(fout, "%lu %u %u %u %u %u %u\n",
             (unsigned long)Simulator::Now().GetNanoSeconds(),
             nodeId,
             logType,
             param0, param1, param2, param3);
+    // 大规模场景下按行 fflush 会产生极高 IO 开销，可能触发超时/被杀（SIGKILL）。
+    // 这里做轻量节流：每 4096 行再 flush 一次，必要时你也可以手动在退出前 fflush。
+    static uint32_t s_fec_log_lines = 0;
+    s_fec_log_lines++;
+    if ((s_fec_log_lines & 0xFFFu) == 0)
+    {
+        fflush(fout);
+    }
+}
+
+static uint64_t ReadSelfRssKb()
+{
+    // /proc/self/statm: size resident share text lib data dt
+    std::ifstream in("/proc/self/statm");
+    if (!in.good())
+    {
+        return 0;
+    }
+    uint64_t size = 0, resident = 0;
+    in >> size >> resident;
+    long page = sysconf(_SC_PAGESIZE);
+    if (page <= 0)
+    {
+        return 0;
+    }
+    return (resident * (uint64_t)page) / 1024;
+}
+
+void fec_state_monitoring(FILE* fout, NodeContainer* n, uint32_t intervalNs)
+{
+    if (!fout || !n)
+    {
+        return;
+    }
+
+    uint64_t flows = 0;
+    uint64_t headers = 0;
+    uint64_t blocks = 0;
+    uint64_t repairs = 0;
+    uint64_t xorBytes = 0;
+    uint64_t ackqPkts = 0;
+    uint64_t ackqBytes = 0;
+    uint64_t pendingRepairPkts = 0;
+    uint64_t pendingRepairBytes = 0;
+    uint64_t repairDropped = 0;
+    uint64_t beqPkts = 0;
+    uint64_t beqBytes = 0;
+    uint64_t swMmuUsedBytes = 0;
+    uint64_t swMmuTotalBytes = 0;
+
+    for (uint32_t i = 0; i < n->GetN(); ++i)
+    {
+        Ptr<Node> node = n->Get(i);
+
+        // Switch MMU occupancy (helps attribute memory spikes to in-flight buffering).
+        Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(node);
+        if (sw && sw->m_mmu)
+        {
+            swMmuUsedBytes += sw->m_mmu->GetUsedBufferTotal();
+            swMmuTotalBytes += sw->m_mmu->GetMmuBufferBytes();
+        }
+
+        for (uint32_t j = 0; j < node->GetNDevices(); ++j)
+        {
+            Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(node->GetDevice(j));
+            if (dev)
+            {
+                Ptr<BEgressQueue> q = dev->GetQueue();
+                if (q)
+                {
+                    beqPkts += q->GetNPacketsTotal();
+                    beqBytes += q->GetNBytesTotal();
+                }
+            }
+            if (!dev || !dev->IsFecEnabled())
+            {
+                continue;
+            }
+            auto s = dev->GetFecInternalStats();
+            flows += s.flowCount;
+            headers += s.totalRxBlockHeaders;
+            blocks += s.totalDecoderBlocks;
+            repairs += s.totalDecoderRepairs;
+            xorBytes += s.totalDecoderXorBytes;
+            pendingRepairPkts += s.pendingRepairCount;
+            pendingRepairBytes += s.pendingRepairBytes;
+            repairDropped += s.repairDropped;
+
+            Ptr<RdmaEgressQueue> eq = dev->GetRdmaQueue();
+            if (eq && eq->m_ackQ)
+            {
+                ackqPkts += eq->m_ackQ->GetNPackets();
+                ackqBytes += eq->m_ackQ->GetNBytes();
+            }
+        }
+    }
+
+    uint64_t rssKb = ReadSelfRssKb();
+    fprintf(fout, "%lu rss_kb=%lu flows=%lu headers=%lu blocks=%lu repairs=%lu xor_bytes=%lu ackq_pkts=%lu ackq_bytes=%lu pending_repair_pkts=%lu pending_repair_bytes=%lu repair_dropped=%lu beq_pkts=%lu beq_bytes=%lu sw_mmu_used=%lu sw_mmu_total=%lu\n",
+            (unsigned long)Simulator::Now().GetNanoSeconds(),
+            (unsigned long)rssKb,
+            (unsigned long)flows,
+            (unsigned long)headers,
+            (unsigned long)blocks,
+            (unsigned long)repairs,
+            (unsigned long)xorBytes,
+            (unsigned long)ackqPkts,
+            (unsigned long)ackqBytes,
+            (unsigned long)pendingRepairPkts,
+            (unsigned long)pendingRepairBytes,
+            (unsigned long)repairDropped,
+            (unsigned long)beqPkts,
+            (unsigned long)beqBytes,
+            (unsigned long)swMmuUsedBytes,
+            (unsigned long)swMmuTotalBytes);
     fflush(fout);
+
+    Simulator::Schedule(NanoSeconds(intervalNs), &fec_state_monitoring, fout, n, intervalNs);
 }
 
 /**
@@ -603,7 +770,13 @@ void on_sw_admission_drop(FILE *fout, Ptr<QbbNetDevice> swDev, Ptr<const Packet>
             (unsigned long)Simulator::Now().GetNanoSeconds(),
             (int)type, nodeId, ifIndex,
             srcId, dstId, sport, dport);
-    fflush(fout);
+    // 大规模场景下逐行 fflush 会产生较高 IO 开销；这里做轻量节流。
+    static uint32_t s_drop_lines = 0;
+    s_drop_lines++;
+    if ((s_drop_lines & 0x3FFu) == 0)
+    {
+        fflush(fout);
+    }
 }
 
 /*******************************************************************/
@@ -1101,6 +1274,15 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("FEC_MON_FILE") == 0) {
                 conf >> fec_mon_file;
                 std::cerr << "FEC_MON_FILE\t\t\t\t" << fec_mon_file << '\n';
+            } else if (key.compare("FEC_STATE_MON_FILE") == 0) {
+                conf >> fec_state_mon_file;
+                std::cerr << "FEC_STATE_MON_FILE\t\t\t\t" << fec_state_mon_file << '\n';
+            } else if (key.compare("FEC_STATE_MON_ENABLED") == 0) {
+                conf >> fec_state_mon_enabled;
+                std::cerr << "FEC_STATE_MON_ENABLED\t\t\t\t" << fec_state_mon_enabled << '\n';
+            } else if (key.compare("FEC_STATE_MON_INTERVAL_NS") == 0) {
+                conf >> fec_state_mon_interval_ns;
+                std::cerr << "FEC_STATE_MON_INTERVAL_NS\t\t\t" << fec_state_mon_interval_ns << '\n';
             } else if (key.compare("LINK_DOWN") == 0) {
                 conf >> link_down_time >> link_down_A >> link_down_B;
                 std::cerr << "LINK_DOWN\t\t\t\t" << link_down_time << ' ' << link_down_A << ' '
@@ -1170,6 +1352,27 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("FEC_INTERLEAVING_DEPTH") == 0) {
                 conf >> fec_interleaving_depth;
                 std::cerr << "FEC_INTERLEAVING_DEPTH\t\t\t" << fec_interleaving_depth << '\n';
+            } else if (key.compare("FEC_TAIL_FLUSH_MIN_PKTS") == 0) {
+                conf >> fec_tail_flush_min_pkts;
+                std::cerr << "FEC_TAIL_FLUSH_MIN_PKTS\t\t\t" << fec_tail_flush_min_pkts << '\n';
+            } else if (key.compare("FEC_MAX_REPAIRS_PER_BLOCK") == 0) {
+                conf >> fec_max_repairs_per_block;
+                std::cerr << "FEC_MAX_REPAIRS_PER_BLOCK\t\t" << fec_max_repairs_per_block << '\n';
+            } else if (key.compare("FEC_REPAIR_PACING_ENABLED") == 0) {
+                conf >> fec_repair_pacing_enabled;
+                std::cerr << "FEC_REPAIR_PACING_ENABLED\t\t" << fec_repair_pacing_enabled << '\n';
+            } else if (key.compare("FEC_REPAIR_RATE_RATIO") == 0) {
+                conf >> fec_repair_rate_ratio;
+                std::cerr << "FEC_REPAIR_RATE_RATIO\t\t\t" << fec_repair_rate_ratio << '\n';
+            } else if (key.compare("FEC_REPAIR_BURST_BYTES") == 0) {
+                conf >> fec_repair_burst_bytes;
+                std::cerr << "FEC_REPAIR_BURST_BYTES\t\t\t" << fec_repair_burst_bytes << '\n';
+            } else if (key.compare("FEC_REPAIR_MAX_BACKLOG_BYTES") == 0) {
+                conf >> fec_repair_max_backlog_bytes;
+                std::cerr << "FEC_REPAIR_MAX_BACKLOG_BYTES\t\t" << fec_repair_max_backlog_bytes << '\n';
+            } else if (key.compare("FEC_LOG_ENABLED") == 0) {
+                conf >> fec_log_enabled;
+                std::cerr << "FEC_LOG_ENABLED\t\t\t\t" << fec_log_enabled << '\n';
             } else if (key.compare("EDGE_CNP_INTERVAL") == 0) {
                 conf >> edge_cnp_interval;
                 std::cerr << "EDGE_CNP_INTERVAL\t\t\t\t" << edge_cnp_interval << '\n';
@@ -1330,7 +1533,21 @@ int main(int argc, char *argv[]) {
     //
     pfc_file = fopen(pfc_output_file.c_str(), "w");
     FILE* rto_output = fopen(rto_mon_file.c_str(), "w");
-    FILE* fec_output = fopen(fec_mon_file.c_str(), "w");
+    FILE* fec_output = nullptr;
+    if (fec_log_enabled)
+    {
+        fec_output = fopen(fec_mon_file.c_str(), "w");
+    }
+    FILE* fec_state_output = nullptr;
+    if (fec_state_mon_enabled)
+    {
+        fec_state_output = fopen(fec_state_mon_file.c_str(), "w");
+    }
+    // 统一设置较大的 stdio buffer，显著减少系统调用，避免大规模实验下 IO 抖动影响主机（例如 SSH 卡顿/掉线）。
+    if (pfc_file) setvbuf(pfc_file, NULL, _IOFBF, 1 << 20);
+    if (rto_output) setvbuf(rto_output, NULL, _IOFBF, 1 << 20);
+    if (fec_output) setvbuf(fec_output, NULL, _IOFBF, 1 << 20);
+    if (fec_state_output) setvbuf(fec_state_output, NULL, _IOFBF, 1 << 20);
 
     QbbHelper qbb;
     Ipv4AddressHelper ipv4;
@@ -1510,13 +1727,32 @@ int main(int argc, char *argv[]) {
                 Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(n.Get(i)->GetDevice(j));
                 if (dev) {
                     dev->SetFecParameters(fec_block_size, fec_interleaving_depth);
+                    dev->SetFecTailFlushMinPkts(fec_tail_flush_min_pkts);
+                    dev->SetFecMaxRepairsPerBlock(fec_max_repairs_per_block);
+                    dev->SetFecRepairPacing(static_cast<bool>(fec_repair_pacing_enabled),
+                                            fec_repair_rate_ratio,
+                                            fec_repair_max_backlog_bytes,
+                                            fec_repair_burst_bytes);
                     dev->EnableFec(true);
-                    // Setup FEC debug callback
-                    dev->m_fecDebugCallback = MakeBoundCallback(on_fec_debug, fec_output);
+                    // Setup FEC debug callback (optional)
+                    if (fec_log_enabled && fec_output)
+                    {
+                        dev->m_fecDebugCallback = MakeBoundCallback(on_fec_debug, fec_output);
+                    }
+                    else
+                    {
+                        dev->m_fecDebugCallback = QbbNetDevice::FecDebugCallback();
+                    }
                 }
             }
         }
         std::cout << "FEC enabled on all devices" << std::endl;
+    }
+
+    if (fec_state_mon_enabled && fec_state_output)
+    {
+        Simulator::Schedule(NanoSeconds(0), &fec_state_monitoring, fec_state_output, &n,
+                            fec_state_mon_interval_ns);
     }
 
     fct_output = fopen(fct_output_file.c_str(), "w");
@@ -1524,6 +1760,9 @@ int main(int argc, char *argv[]) {
     if (cc_mode == 1) {
         cnp_output = fopen(cnp_output_file.c_str(), "w");
     }
+    if (fct_output) setvbuf(fct_output, NULL, _IOFBF, 1 << 20);
+    if (flow_input_stream) setvbuf(flow_input_stream, NULL, _IOFBF, 1 << 20);
+    if (cnp_output) setvbuf(cnp_output, NULL, _IOFBF, 1 << 20);
 
     /**
      * @brief install RDMA driver (Mellanox parameters)

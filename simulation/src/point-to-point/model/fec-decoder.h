@@ -13,6 +13,7 @@
 #include <vector>
 #include <map>
 #include <bitset>
+#include <cstdint>
 #include "ns3/object.h"
 #include "ns3/packet.h"
 #include "ns3/ptr.h"
@@ -93,7 +94,11 @@ public:
   void ReceiveRepairPacket(Ptr<Packet> repairPacket,
                            uint32_t basePSN,
                            uint16_t isn,
-                           const std::vector<uint32_t>& recipe);
+                           const std::vector<uint32_t>& recipe,
+                           bool hasFirst,
+                           bool hasLast,
+                           uint16_t lastRel,
+                           uint16_t lastLength);
 
   /**
    * \brief Attempt to recover missing packets
@@ -116,12 +121,14 @@ public:
   bool IsBlockComplete(uint32_t basePSN) const;
 
   /**
-   * \brief Get a packet from the reordering buffer
+   * \brief Query whether a packet PSN is available (received or recovered)
+   *
+   * 为避免缓存所有数据包，本解码器不再提供按 PSN 取包接口；上层仅需要缺失计数/尾块判断。
    *
    * \param psn Packet sequence number
-   * \return Packet if available, null otherwise
+   * \return True if available
    */
-  Ptr<Packet> GetPacket(uint32_t psn) const;
+  bool HasPacket(uint32_t psn) const;
 
   /**
    * \brief Remove old blocks from buffer
@@ -144,16 +151,33 @@ public:
    */
   uint32_t GetUnrecoverableCount() const;
 
+  /**
+   * \brief Whether decoder has any buffered state
+   *
+   * Used by upper-layer GC to reclaim per-flow decoder state in large simulations.
+   */
+  bool IsIdle() const;
+
+  // 轻量观测接口：用于大规模实验定位内存增长来源（不会返回或持有数据包对象）。
+  size_t GetBlockStateCount() const { return m_blockStates.size(); }
+  size_t GetRepairBufferCount() const { return m_repairBuffer.size(); }
+  size_t GetApproxXorBytes() const;
+
 private:
   /**
    * \brief Repair packet information
    */
   struct RepairPacketInfo
   {
-    Ptr<Packet> packet;           ///< The repair packet data
+    std::vector<uint8_t> payload; ///< Repair payload bytes (without FEC header)
+    uint32_t payloadLen;          ///< Payload length in bytes
     uint32_t basePSN;             ///< Base PSN of coding block
     uint16_t isn;                 ///< Interleaving sequence number
     std::vector<uint32_t> recipe; ///< PSNs XORed in this repair
+    bool hasFirst;                ///< Whether this block contains message first packet
+    bool hasLast;                 ///< Whether this block contains message last packet
+    uint16_t lastRel;             ///< Relative index of message last packet within block
+    uint16_t lastLength;          ///< Byte length of message last packet ([FecHeader][Payload])
     bool used;                    ///< Whether this repair was used for recovery
   };
 
@@ -165,6 +189,12 @@ private:
     uint32_t basePSN;                          ///< Base PSN of this block
     std::bitset<MAX_BLOCK_SIZE> receivedBits;  ///< Bitmap of received packets
     uint32_t receivedCount;                    ///< Number of received packets
+    struct UnitXor
+    {
+      std::vector<uint8_t> xorBuf;
+      uint32_t maxLen{0};
+    };
+    std::vector<UnitXor> unitXor;              ///< size = m_interleavingDepth
   };
 
   /**
@@ -197,11 +227,8 @@ private:
 
   uint32_t m_blockSize;             ///< r: Coding block size
   uint32_t m_interleavingDepth;     ///< c: Number of interleaving layers
-
-  /**
-   * \brief Reordering buffer: PSN → Packet
-   */
-  std::map<uint32_t, Ptr<Packet>> m_reorderBuffer;
+  // 丢弃 PSN 小于该阈值的 data/repair（用于在清理旧块后忽略迟到的 repair，避免旧块状态被重新创建）
+  uint32_t m_dropBeforePsn{0};
 
   /**
    * \brief Block state tracking: bPSN → BlockState

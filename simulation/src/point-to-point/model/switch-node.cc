@@ -117,7 +117,7 @@ uint32_t SwitchNode::DoLbFlowECMP(Ptr<const Packet> p, const CustomHeader &ch,
     buf.u32[1] = ch.dip;
     if (ch.l3Prot == 0x6)
         buf.u32[2] = ch.tcp.sport | ((uint32_t)ch.tcp.dport << 16);
-    else if (ch.l3Prot == 0x11 || ch.l3Prot == 0xFB) {  // RDMA traffic on UDP or FEC repair
+    else if (ch.l3Prot == 0x11 || ch.l3Prot == 0xFB || ch.l3Prot == 0xFA) {  // RDMA traffic on UDP or FEC repair/negotiation
         buf.u32[2] = ch.udp.sport | ((uint32_t)ch.udp.dport << 16);
     }
     else if (ch.l3Prot == 0xFC || ch.l3Prot == 0xFD)  // ACK or NACK

@@ -81,6 +81,10 @@ FecHeaderTest::DoRun(void)
     repairHeader.SetInterleavingDepth(8);
     repairHeader.SetBasePSN(0);
     repairHeader.SetISN(3);
+    repairHeader.SetHasFirst(true);
+    repairHeader.SetHasLast(true);
+    repairHeader.SetLastRel(7);
+    repairHeader.SetLastLength(1234);
 
     std::vector<uint32_t> recipe;
     recipe.push_back(0);
@@ -96,12 +100,41 @@ FecHeaderTest::DoRun(void)
 
     NS_TEST_ASSERT_MSG_EQ(receivedRepairHeader.GetType(), FecHeader::FEC_REPAIR, "REPAIR type mismatch");
     NS_TEST_ASSERT_MSG_EQ(receivedRepairHeader.GetISN(), 3, "ISN mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedRepairHeader.GetHasFirst(), true, "HasFirst mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedRepairHeader.GetHasLast(), true, "HasLast mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedRepairHeader.GetLastRel(), 7, "LastRel mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedRepairHeader.GetLastLength(), 1234, "LastLength mismatch");
 
     std::vector<uint32_t> receivedRecipe = receivedRepairHeader.GetRecipe();
     NS_TEST_ASSERT_MSG_EQ(receivedRecipe.size(), 3, "Recipe size mismatch");
     NS_TEST_ASSERT_MSG_EQ(receivedRecipe[0], 0, "Recipe[0] mismatch");
     NS_TEST_ASSERT_MSG_EQ(receivedRecipe[1], 8, "Recipe[1] mismatch");
     NS_TEST_ASSERT_MSG_EQ(receivedRecipe[2], 16, "Recipe[2] mismatch");
+
+    // Test NEGOTIATE packet header (no recipe)
+    FecHeader negHeader;
+    negHeader.SetType(FecHeader::FEC_NEGOTIATE);
+    negHeader.SetBlockSize(32);
+    negHeader.SetInterleavingDepth(5);
+    negHeader.SetBasePSN(0);
+    negHeader.SetISN(0); // NegOp: 0=request, 1=ack
+    negHeader.SetHasFirst(false);
+    negHeader.SetHasLast(false);
+    negHeader.SetLastRel(0);
+    negHeader.SetLastLength(0);
+    negHeader.SetRecipe(std::vector<uint32_t>());
+
+    Ptr<Packet> negPacket = Create<Packet>(0);
+    negPacket->AddHeader(negHeader);
+
+    FecHeader receivedNegHeader;
+    negPacket->RemoveHeader(receivedNegHeader);
+
+    NS_TEST_ASSERT_MSG_EQ(receivedNegHeader.GetType(), FecHeader::FEC_NEGOTIATE, "NEGOTIATE type mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedNegHeader.GetBlockSize(), 32, "NEGOTIATE block size mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedNegHeader.GetInterleavingDepth(), 5, "NEGOTIATE interleaving depth mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedNegHeader.GetISN(), 0, "NEGOTIATE op mismatch");
+    NS_TEST_ASSERT_MSG_EQ(receivedNegHeader.GetRecipe().size(), 0, "NEGOTIATE recipe should be empty");
 
     NS_LOG_INFO("FEC Header test passed");
 }
@@ -226,7 +259,7 @@ FecEncoderTest::DoRun(void)
     NS_TEST_ASSERT_MSG_EQ(encoder->IsBlockComplete(), true, "Block should be complete");
 
     // Generate repair packets
-    std::vector<Ptr<Packet>> repairPackets = encoder->GenerateRepairPackets();
+    std::vector<Ptr<Packet>> repairPackets = encoder->GenerateRepairPackets(false);
 
     NS_TEST_ASSERT_MSG_EQ(repairPackets.size(), interleavingDepth, "Should generate c repair packets");
 
@@ -246,6 +279,51 @@ FecEncoderTest::DoRun(void)
     NS_TEST_ASSERT_MSG_EQ(encoder->IsBlockComplete(), false, "Block should not be complete after reset");
 
     NS_LOG_INFO("FEC Encoder test passed");
+}
+
+/**
+ * \brief FEC Encoder Tail Flush Test Case
+ *
+ * 验证 allowIncomplete=true 时可以对未满 r 的尾块生成 repair 包（与 LoWAR 的 message-aware flush 对齐）。
+ */
+class FecEncoderTailFlushTest : public TestCase
+{
+public:
+    FecEncoderTailFlushTest();
+    virtual ~FecEncoderTailFlushTest();
+
+private:
+    virtual void DoRun(void);
+};
+
+FecEncoderTailFlushTest::FecEncoderTailFlushTest()
+    : TestCase("FEC Encoder tail flush on incomplete block")
+{
+}
+
+FecEncoderTailFlushTest::~FecEncoderTailFlushTest()
+{
+}
+
+void
+FecEncoderTailFlushTest::DoRun(void)
+{
+    uint32_t blockSize = 8;
+    uint32_t interleavingDepth = 4;
+    Ptr<FecEncoder> encoder = Ptr<FecEncoder>(new FecEncoder(blockSize, interleavingDepth));
+
+    // Encode fewer than r packets
+    for (uint32_t i = 0; i < 3; i++)
+    {
+        Ptr<Packet> packet = Create<Packet>(100);
+        encoder->EncodePacket(packet, i);
+    }
+
+    NS_TEST_ASSERT_MSG_EQ(encoder->IsBlockComplete(), false, "Block should be incomplete");
+
+    std::vector<Ptr<Packet>> repairs = encoder->GenerateRepairPackets(true);
+    NS_TEST_ASSERT_MSG_NE(repairs.size(), 0, "Tail flush should generate at least 1 repair");
+    NS_TEST_ASSERT_MSG_EQ((repairs.size() <= interleavingDepth), true, "Repair count should be <= c");
 }
 
 /**
@@ -305,7 +383,7 @@ FecDecoderTest::DoRun(void)
     }
 
     Ptr<Packet> repairPayload = Create<Packet>(100);
-    decoder->ReceiveRepairPacket(repairPayload, 0, 0, recipe);
+    decoder->ReceiveRepairPacket(repairPayload, 0, 0, recipe, false, false, 0, 0);
 
     // Attempt recovery
     std::vector<Ptr<Packet>> recoveredPackets = decoder->RecoverLostPackets();
@@ -314,6 +392,58 @@ FecDecoderTest::DoRun(void)
     NS_TEST_ASSERT_MSG_EQ(recoveredPackets.size(), 1, "Should recover 1 packet");
 
     NS_LOG_INFO("FEC Decoder test passed");
+}
+
+/**
+ * \brief FEC Decoder Edge Trim Test Case
+ *
+ * 验证当丢失的是消息尾包且尾包长度小于修复得到的 maxLen 时，会按 repair header 的 LastLength 裁剪。
+ */
+class FecDecoderEdgeTrimTest : public TestCase
+{
+public:
+    FecDecoderEdgeTrimTest();
+    virtual ~FecDecoderEdgeTrimTest();
+
+private:
+    virtual void DoRun(void);
+};
+
+FecDecoderEdgeTrimTest::FecDecoderEdgeTrimTest()
+    : TestCase("FEC Decoder trims recovered tail packet length")
+{
+}
+
+FecDecoderEdgeTrimTest::~FecDecoderEdgeTrimTest()
+{
+}
+
+void
+FecDecoderEdgeTrimTest::DoRun(void)
+{
+    uint32_t blockSize = 4;
+    uint32_t interleavingDepth = 1;
+    Ptr<FecDecoder> decoder = Ptr<FecDecoder>(new FecDecoder(blockSize, interleavingDepth));
+
+    Ptr<Packet> p0 = Create<Packet>(100);
+    Ptr<Packet> p1 = Create<Packet>(100);
+    Ptr<Packet> p2 = Create<Packet>(100);
+    Ptr<Packet> p3 = Create<Packet>(50);  // tail shorter
+
+    decoder->ReceiveDataPacket(p0, 0);
+    decoder->ReceiveDataPacket(p1, 1);
+    decoder->ReceiveDataPacket(p2, 2);
+
+    std::vector<Ptr<Packet>> orig{p0, p1, p2, p3};
+    Ptr<Packet> repair = FecXorEngine::XorPackets(orig);
+
+    std::vector<uint32_t> recipe{0, 1, 2, 3};
+
+    decoder->ReceiveRepairPacket(repair, 0, 0, recipe, true, true, 3, 50);
+
+    std::vector<Ptr<Packet>> recovered = decoder->RecoverLostPackets();
+    NS_TEST_ASSERT_MSG_EQ(recovered.size(), 1, "Should recover 1 packet");
+    NS_TEST_ASSERT_MSG_EQ(recovered[0]->GetSize(), 50, "Recovered tail packet should be trimmed to 50 bytes");
 }
 
 /**
@@ -366,7 +496,7 @@ FecEndToEndTest::DoRun(void)
     NS_TEST_ASSERT_MSG_EQ(encoder->IsBlockComplete(), true, "Encoding block should be complete");
 
     // Generate repair packets
-    std::vector<Ptr<Packet>> repairPackets = encoder->GenerateRepairPackets();
+    std::vector<Ptr<Packet>> repairPackets = encoder->GenerateRepairPackets(false);
     NS_TEST_ASSERT_MSG_EQ(repairPackets.size(), interleavingDepth, "Should generate c repair packets");
 
     // Simulate reception with one packet loss
@@ -393,7 +523,9 @@ FecEndToEndTest::DoRun(void)
         Ptr<Packet> payload = repairPackets[i]->Copy();
         payload->RemoveHeader(header);
 
-        decoder->ReceiveRepairPacket(payload, header.GetBasePSN(), header.GetISN(), header.GetRecipe());
+        decoder->ReceiveRepairPacket(payload, header.GetBasePSN(), header.GetISN(), header.GetRecipe(),
+                                     header.GetHasFirst(), header.GetHasLast(),
+                                     header.GetLastRel(), header.GetLastLength());
 
         // Try recovery after each repair packet
         std::vector<Ptr<Packet>> recovered = decoder->RecoverLostPackets();
@@ -424,7 +556,9 @@ FecTestSuite::FecTestSuite()
     AddTestCase(new FecHeaderTest, TestCase::QUICK);
     AddTestCase(new FecXorEngineTest, TestCase::QUICK);
     AddTestCase(new FecEncoderTest, TestCase::QUICK);
+    AddTestCase(new FecEncoderTailFlushTest, TestCase::QUICK);
     AddTestCase(new FecDecoderTest, TestCase::QUICK);
+    AddTestCase(new FecDecoderEdgeTrimTest, TestCase::QUICK);
     AddTestCase(new FecEndToEndTest, TestCase::QUICK);
 }
 

@@ -243,7 +243,8 @@ bool TestDecoder()
     }
 
     Ptr<Packet> repairPayload = Create<Packet>(100);
-    decoder->ReceiveRepairPacket(repairPayload, 0, 0, recipe);
+    decoder->ReceiveRepairPacket(repairPayload, 0, 0, recipe,
+                                 false, false, 0, 0);
 
     // Attempt recovery
     std::vector<Ptr<Packet>> recoveredPackets = decoder->RecoverLostPackets();
@@ -314,7 +315,9 @@ bool TestEndToEnd()
         payload->RemoveHeader(header);
 
         decoder->ReceiveRepairPacket(payload, header.GetBasePSN(),
-                                    header.GetISN(), header.GetRecipe());
+                                     header.GetISN(), header.GetRecipe(),
+                                     header.GetHasFirst(), header.GetHasLast(),
+                                     header.GetLastRel(), header.GetLastLength());
 
         std::vector<Ptr<Packet>> recoveredPkts = decoder->RecoverLostPackets();
         if (!recoveredPkts.empty()) {

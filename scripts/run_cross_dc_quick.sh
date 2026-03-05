@@ -10,9 +10,21 @@ cecho(){  # 简单彩色输出
 ROOT_DIR="$(cd "$(dirname "$0")"/.. && pwd)"
 SIM_DIR="${ROOT_DIR}/simulation"
 
+# cross_dc 运行开关：默认按跨 DC lossy 场景配置（PFC off, IRN on）
+PFC_ENABLED=0
+IRN_ENABLED=1
+
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --pfc)
+      PFC_ENABLED="$2"
+      shift 2
+      ;;
+    --irn)
+      IRN_ENABLED="$2"
+      shift 2
+      ;;
     --simul-time)
       SIM_TIME="$2"
       shift 2
@@ -61,9 +73,15 @@ while [[ $# -gt 0 ]]; do
       INTER_LATENCY="$2"
       shift 2
       ;;
+    --fec-enabled)
+      FEC_ENABLED="$2"
+      shift 2
+      ;;
     -h|--help)
       echo "Usage: $0 [OPTIONS]"
       echo "Options:"
+      echo "  --pfc 0|1           Enable PFC (default: 0)"
+      echo "  --irn 0|1           Enable IRN (default: 1)"
       echo "  --simul-time TIME     Simulation time (default: 0.02)"
       echo "  --intra-load LOAD     Intra-DC load (default: 0.5)"
       echo "  --inter-load LOAD     Inter-DC load (default: 0.2)"
@@ -76,6 +94,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --inter-error RATE    Inter-DC link error rate (default: 0.0)"
       echo "  --intra-latency NS    Intra-DC link latency in ns (default: 1000 - 1us)"
       echo "  --inter-latency NS    Inter-DC link latency in ns (default: 400000 - 400us)"
+      echo "  --fec-enabled 0|1     Enable FEC (default: 0)"
       echo "  -h, --help            Show this help message"
       exit 0
       ;;
@@ -86,6 +105,16 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# 参数校验
+if [[ "${PFC_ENABLED}" != "0" && "${PFC_ENABLED}" != "1" ]]; then
+  echo "Invalid --pfc: ${PFC_ENABLED} (expected: 0|1)"
+  exit 1
+fi
+if [[ "${IRN_ENABLED}" != "0" && "${IRN_ENABLED}" != "1" ]]; then
+  echo "Invalid --irn: ${IRN_ENABLED} (expected: 0|1)"
+  exit 1
+fi
 
 # 可选：环境变量或参数控制基础运行时间与负载（留空则用脚本内默认）
 SIM_TIME=${SIM_TIME:-"0.02"}
@@ -100,13 +129,14 @@ INTRA_ERROR=${INTRA_ERROR:-"0.0"}
 INTER_ERROR=${INTER_ERROR:-"0.05"}
 INTRA_LATENCY=${INTRA_LATENCY:-"1000"}
 INTER_LATENCY=${INTER_LATENCY:-"400000"}
+FEC_ENABLED=${FEC_ENABLED:-"0"}
 
 RESULTS_ROOT="${ROOT_DIR}/results"
 SCRIPT_TAG="run_cross_dc_quick"
 RUN_DIR="${RESULTS_ROOT}/${SCRIPT_TAG}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "${RUN_DIR}"
 
-cecho "GREEN" "Running lossy cross-dc simulation (PFC off, IRN on)"
+cecho "GREEN" "Running lossy cross-dc simulation (PFC=${PFC_ENABLED}, IRN=${IRN_ENABLED}, FEC=${FEC_ENABLED})"
 cecho "YELLOW" "simul_time=${SIM_TIME}, intra_load=${INTRA_LOAD}, inter_load=${INTER_LOAD}"
 cecho "YELLOW" "intra_error=${INTRA_ERROR}, inter_error=${INTER_ERROR}"
 cecho "YELLOW" "intra_latency=${INTRA_LATENCY}ns, inter_latency=${INTER_LATENCY}ns"
@@ -117,8 +147,9 @@ pre_ids=$(ls -1 "${SIM_DIR}/mix/output" 2>/dev/null || true)
 pushd "${SIM_DIR}" >/dev/null
 
 python3 run_cross_dc.py \
-  --pfc 0 \
-  --irn 1 \
+  --pfc "${PFC_ENABLED}" \
+  --irn "${IRN_ENABLED}" \
+  --fec-enabled "${FEC_ENABLED}" \
   --simul_time "${SIM_TIME}" \
   --intra-load "${INTRA_LOAD}" \
   --inter-load "${INTER_LOAD}" \

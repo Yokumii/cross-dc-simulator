@@ -11,7 +11,6 @@
 #define FEC_ENCODER_H
 
 #include <vector>
-#include <map>
 #include "ns3/object.h"
 #include "ns3/packet.h"
 #include "ns3/ptr.h"
@@ -91,11 +90,13 @@ public:
    * \brief 生成当前块的 repair 包
    *
    * 每个 coding unit 最多生成一个 repair 包。
-   * 仅在 IsBlockComplete() 为 true 时调用。
+   * 默认仅在 IsBlockComplete() 为 true 时调用；若 allowIncomplete=true，则用于“消息结束时的尾块 flush”，
+   * 会对当前已编码的数据包集合生成 repair 包（与 LoWAR 的 message-aware coding 对齐）。
    *
+   * \param allowIncomplete 是否允许对未满 r 的尾块生成 repair
    * \return 带 FEC 头部的 repair 包列表
    */
-  std::vector<Ptr<Packet>> GenerateRepairPackets();
+  std::vector<Ptr<Packet>> GenerateRepairPackets(bool allowIncomplete = false);
 
   /**
    * \brief Reset encoder state for next coding block
@@ -116,6 +117,19 @@ public:
    * \return Count of packets encoded in current block
    */
   uint32_t GetPacketsInBlock() const;
+
+  /**
+   * \brief 当前块是否已有数据包
+   */
+  bool HasData() const { return m_packetsInBlock > 0; }
+
+  /**
+   * \brief 标记当前编码块包含消息尾包（用于 repair header edge metadata）
+   *
+   * \param lastRel 尾包在块内的相对序号（0..r-1）
+   * \param lastLength 尾包长度（[FecHeader][Payload] 的字节数）
+   */
+  void MarkHasLast(uint16_t lastRel, uint16_t lastLength);
 
 private:
   /**
@@ -139,6 +153,11 @@ private:
    */
   void AddPacketToCodingUnit(CodingUnit& unit, Ptr<Packet> packet, uint32_t psn);
 
+  bool m_hasFirst;
+  bool m_hasLast;
+  uint16_t m_lastRel;
+  uint16_t m_lastLength;
+
   uint32_t m_blockSize;             ///< r: Coding block size
   uint32_t m_interleavingDepth;     ///< c: Number of interleaving layers
 
@@ -150,12 +169,6 @@ private:
    */
   std::vector<CodingUnit> m_units;
 
-  /**
-   * \brief Map from PSN to packet for current block
-   *
-   * Stores packets temporarily for repair generation.
-   */
-  std::map<uint32_t, Ptr<Packet>> m_blockPackets;
 };
 
 } // namespace ns3

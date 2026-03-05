@@ -40,6 +40,50 @@ INTER_LATENCY="400000"
 FEC_BLOCK_SIZE="64"
 FEC_INTERLEAVING_DEPTH="8"
 
+# cross-dc lossy WAN 的默认开关（可通过命令行覆盖）
+PFC_ENABLED="0"
+IRN_ENABLED="1"
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --pfc)
+      PFC_ENABLED="$2"
+      shift 2
+      ;;
+    --irn)
+      IRN_ENABLED="$2"
+      shift 2
+      ;;
+    -h|--help)
+      echo "Usage: $0 [OPTIONS]"
+      echo "Options:"
+      echo "  --pfc 0|1   Enable PFC (default: 0)"
+      echo "  --irn 0|1   Enable IRN (default: 1)"
+      echo "  -h, --help  Show this help message"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Use --help for usage information"
+      exit 1
+      ;;
+  esac
+done
+
+if [[ "${PFC_ENABLED}" != "0" && "${PFC_ENABLED}" != "1" ]]; then
+  cecho "RED" "错误: --pfc 只支持 0/1，当前=${PFC_ENABLED}"
+  exit 1
+fi
+if [[ "${IRN_ENABLED}" != "0" && "${IRN_ENABLED}" != "1" ]]; then
+  cecho "RED" "错误: --irn 只支持 0/1，当前=${IRN_ENABLED}"
+  exit 1
+fi
+
+# FEC 观测：开启详细 FEC 日志，配合状态监控用于定位“收益/开销/拥塞”来源
+FEC_LOG_ENABLED="1"
+FEC_STATE_MON_ENABLED="1"
+FEC_STATE_MON_INTERVAL_NS="10000000"  # 10ms
+
 # 要测试的 inter-dc 错误率（科学计数法）
 ERROR_RATES=("0.0001" "0.001" "0.01")  # 10^-4, 10^-3, 10^-2
 ERROR_LABELS=("1e-4" "1e-3" "1e-2")
@@ -58,6 +102,7 @@ echo "  · 拓扑: Fat-tree k=${K_FAT}, 数据中心数=${NUM_DC}"
 echo "  · 负载: intra=${INTRA_LOAD}, inter=${INTER_LOAD}"
 echo "  · 带宽: intra=${INTRA_BW}Gbps, inter=${INTER_BW}Gbps"
 echo "  · 延迟: intra=${INTRA_LATENCY}ns, inter=${INTER_LATENCY}ns"
+echo "  · 开关: PFC=${PFC_ENABLED}, IRN=${IRN_ENABLED}"
 echo "  · FEC参数: block_size=${FEC_BLOCK_SIZE}, depth=${FEC_INTERLEAVING_DEPTH}"
 echo ""
 cecho "YELLOW" "测试场景 (共6个):"
@@ -92,8 +137,13 @@ Flow scale: ${FLOW_SCALE}
 Intra-DC错误率: ${INTRA_ERROR}
 Intra-DC延迟: ${INTRA_LATENCY} ns
 Inter-DC延迟: ${INTER_LATENCY} ns
+PFC: ${PFC_ENABLED}
+IRN: ${IRN_ENABLED}
 FEC block size: ${FEC_BLOCK_SIZE}
 FEC interleaving depth: ${FEC_INTERLEAVING_DEPTH}
+FEC log enabled: ${FEC_LOG_ENABLED}
+FEC state monitor enabled: ${FEC_STATE_MON_ENABLED}
+FEC state monitor interval: ${FEC_STATE_MON_INTERVAL_NS} ns
 
 测试场景:
 ---------
@@ -137,13 +187,10 @@ for i in "${!ERROR_RATES[@]}"; do
             echo '=========================================' | tee -a '${task_dir}/simulation.log'
             echo '' | tee -a '${task_dir}/simulation.log'
 
-            # 记录运行前的输出ID
-            pre_ids=\$(ls -1 mix/output 2>/dev/null || true)
-
             # 运行仿真
             python3 run_cross_dc.py \\
-                --pfc 1 \\
-                --irn 0 \\
+                --pfc '${PFC_ENABLED}' \\
+                --irn '${IRN_ENABLED}' \\
                 --simul_time '${SIM_TIME}' \\
                 --intra-load '${INTRA_LOAD}' \\
                 --inter-load '${INTER_LOAD}' \\
@@ -159,33 +206,52 @@ for i in "${!ERROR_RATES[@]}"; do
                 --fec-enabled '${fec_enabled}' \\
                 --fec-block-size '${FEC_BLOCK_SIZE}' \\
                 --fec-interleaving-depth '${FEC_INTERLEAVING_DEPTH}' \\
+                --fec-log-enabled '${FEC_LOG_ENABLED}' \\
+                --fec-state-mon-enabled '${FEC_STATE_MON_ENABLED}' \\
+                --fec-state-mon-interval-ns '${FEC_STATE_MON_INTERVAL_NS}' \\
                 2>&1 | tee -a '${task_dir}/simulation.log'
 
             exit_code=\$?
 
-            # 移动输出结果
-            post_ids=\$(ls -1 mix/output 2>/dev/null || true)
-            for id in \${post_ids}; do
-                if ! echo \"\${pre_ids}\" | grep -qx \"\${id}\"; then
-                    if [ -d \"mix/output/\${id}\" ]; then
-                        mv \"mix/output/\${id}\" '${task_dir}/' 2>/dev/null || cp -r \"mix/output/\${id}\" '${task_dir}/'
-                        echo \"输出已移动到: ${task_dir}/\${id}\" | tee -a '${task_dir}/simulation.log'
+            # 移动输出结果（必须精确匹配本次运行的 output_id，避免并发场景互相误搬运）
+            out_id=\$(grep -E \"^Config filename: .*mix/output/[0-9]+/config\\.txt\" -a '${task_dir}/simulation.log' \\\n+                | tail -n 1 \\\n+                | sed -n 's@.*mix/output/\\([0-9][0-9]*\\)/config\\.txt.*@\\1@p')\n+\n+            if [ -z \"\$out_id\" ]; then\n+                echo \"✗ 未能从日志解析 output_id（Config filename），跳过自动搬运（请手动检查 mix/output）\" | tee -a '${task_dir}/simulation.log'\n+            else\n+                if [ -d \"mix/output/\${out_id}\" ]; then\n+                    mv \"mix/output/\${out_id}\" '${task_dir}/' 2>/dev/null || cp -r \"mix/output/\${out_id}\" '${task_dir}/'\n+                    echo \"输出已移动到: ${task_dir}/\${out_id}\" | tee -a '${task_dir}/simulation.log'\n+                else\n+                    echo \"✗ 解析到 output_id=\${out_id} 但目录不存在：mix/output/\${out_id}\" | tee -a '${task_dir}/simulation.log'\n+                fi\n+            fi
+
+            # 机制生效检查：with-fec 场景必须观测到 FEC 状态输出且出现非零流/repair
+            check_ok=1
+            if [ \$exit_code -eq 0 ] && [ '${fec_enabled}' = '1' ]; then
+                state_file=''
+                if [ -n \"\$out_id\" ] && [ -f \"${task_dir}/\$out_id/${out_id}_out_fec_state.txt\" ]; then
+                    state_file=\"${task_dir}/\$out_id/${out_id}_out_fec_state.txt\"
+                fi
+                if [ -z \"\$state_file\" ]; then
+                    echo \"✗ FEC 生效检查失败：未找到 *_out_fec_state.txt\" | tee -a '${task_dir}/simulation.log'
+                    check_ok=0
+                else
+                    # 取最后一行，检查 flows/repairs 是否为正（仅表示机制参与，不强制要求 recovery>0）
+                    last_line=\$(tail -n 1 \"\$state_file\" 2>/dev/null || true)
+                    flows=\$(echo \"\$last_line\" | sed -n 's/.*flows=\\([0-9][0-9]*\\).*/\\1/p')
+                    repairs=\$(echo \"\$last_line\" | sed -n 's/.*repairs=\\([0-9][0-9]*\\).*/\\1/p')
+                    if [ -z \"\$flows\" ] || [ -z \"\$repairs\" ] || [ \"\$flows\" -le 0 ] || [ \"\$repairs\" -le 0 ]; then
+                        echo \"✗ FEC 生效检查失败：flows/repairs 未观测到正值，last_line=\$last_line\" | tee -a '${task_dir}/simulation.log'
+                        check_ok=0
+                    else
+                        echo \"✓ FEC 生效检查通过：flows=\$flows repairs=\$repairs\" | tee -a '${task_dir}/simulation.log'
                     fi
                 fi
-            done
+            fi
 
             echo '' | tee -a '${task_dir}/simulation.log'
             echo '=========================================' | tee -a '${task_dir}/simulation.log'
-            if [ \$exit_code -eq 0 ]; then
+            if [ \$exit_code -eq 0 ] && [ \$check_ok -eq 1 ]; then
                 echo '✓ 仿真成功完成' | tee -a '${task_dir}/simulation.log'
             else
-                echo '✗ 仿真失败 (退出码: '\$exit_code')' | tee -a '${task_dir}/simulation.log'
+                echo '✗ 仿真失败 (退出码: '\$exit_code', check_ok: '\$check_ok')' | tee -a '${task_dir}/simulation.log'
             fi
             echo '结束时间: $(date)' | tee -a '${task_dir}/simulation.log'
             echo '=========================================' | tee -a '${task_dir}/simulation.log'
 
             # 创建完成标记
-            if [ \$exit_code -eq 0 ]; then
+            if [ \$exit_code -eq 0 ] && [ \$check_ok -eq 1 ]; then
                 touch '${task_dir}/.completed'
             else
                 touch '${task_dir}/.failed'

@@ -37,6 +37,7 @@
 #include "fec-encoder.h"
 #include "fec-decoder.h"
 #include <unordered_map>
+#include <deque>
 
 namespace ns3 {
 
@@ -48,6 +49,9 @@ public:
 	int m_qlast;
 	uint32_t m_rrlast;
 	Ptr<DropTailQueue> m_ackQ; // highest priority queue
+	// FEC repair packets must NOT bypass PFC; keep them in per-PG queues that respect pause classes.
+	std::vector<Ptr<DropTailQueue> > m_repairQ; // size=qCnt
+	uint32_t m_repairRrlast{0};
 	Ptr<RdmaQueuePairGroup> m_qpGrp; // queue pairs
 	std::unordered_map<int32_t, Time> current_pause_time;
 
@@ -65,6 +69,7 @@ public:
 	Ptr<RdmaQueuePair> GetQp(uint32_t i);
 	void RecoverQueue(uint32_t i);
 	void EnqueueHighPrioQ(Ptr<Packet> p);
+	void EnqueueRepairQ(Ptr<Packet> p, uint32_t pg);
 	void CleanHighPrio(TracedCallback<Ptr<const Packet>, uint32_t> dropCb);
 
 	TracedCallback<Ptr<const Packet>, uint32_t> m_traceRdmaEnqueue;
@@ -201,10 +206,35 @@ public:
   void FecTransmit(Ptr<Packet> packet);
   void FecReceive(Ptr<Packet> packet, const CustomHeader& ch);  // Added CustomHeader parameter
   void SendRepairPackets(const std::vector<Ptr<Packet>>& repairPackets, const CustomHeader& baseHeader);
+  void SendNegotiatePacket(const CustomHeader& rxCh, uint32_t newR, uint32_t newC, uint16_t negOp);
+  void FecDrainRepairQueue();
 
   bool m_fecEnabled;                    ///< Whether FEC is enabled
   uint32_t m_fecBlockSize;              ///< FEC block size (r parameter)
   uint32_t m_fecInterleavingDepth;      ///< FEC interleaving depth (c parameter)
+  uint32_t m_fecTailFlushMinPkts{8};    ///< 尾块 flush 的最小数据包数（小于该值则不发 repair，减少短流开销）
+  uint32_t m_fecMaxRepairsPerBlock{0};  ///< 每块最多发送 repair 数（0 表示不限制，默认按 c）
+
+  // FEC repair 发送节流（LoWAR 风格 best-effort：拥塞时降级为少发/不发，交给重传）
+  bool m_fecRepairPacingEnabled{true};
+  double m_fecRepairRateRatio{0.0};          ///< 相对链路速率的 repair pacing 比例（0 表示自动按 c/r）
+  uint64_t m_fecRepairRateBps{0};            ///< 实际使用的 pacing 速率（bps）；0 表示需按 ratio 自动计算
+  uint64_t m_fecRepairBurstBytes{65536};     ///< token bucket burst
+  uint64_t m_fecRepairMaxBacklogBytes{8ull * 1024 * 1024}; ///< repair backlog 上限（含 pending + NIC repairQ）
+  uint64_t m_fecRepairTokenBytes{0};
+  uint64_t m_fecRepairTokenLastNs{0};
+  bool m_fecRepairZeroRateWarned{false};    ///< pacing 速率为 0 的告警去重（避免刷屏/忙等）
+  EventId m_fecRepairDrainEvent;
+
+  struct FecPendingRepair
+  {
+    Ptr<Packet> packet;
+    uint32_t pg{0};
+    uint32_t bytes{0};
+  };
+  std::deque<FecPendingRepair> m_fecPendingRepairs;
+  uint64_t m_fecPendingRepairBytes{0};
+  uint32_t m_fecRepairDropped{0};  ///< 因 backlog/pacing 丢弃的 repair 数（best-effort）
 
   struct FecFlowKey
   {
@@ -238,6 +268,11 @@ public:
 
   struct FecFlowState
   {
+    uint32_t cfgBlockSize = 0;
+    uint32_t cfgInterleavingDepth = 0;
+    uint64_t lastActiveNs = 0;
+    bool rxSawTail = false;
+    uint64_t rxTailSeenNs = 0;
     uint32_t txNextPsn = 0;
     bool txHasBlockHeader = false;
     CustomHeader txBlockHeader;  // CustomHeader from first packet of current FEC block (TX)
@@ -246,9 +281,29 @@ public:
     Ptr<FecDecoder> decoder;
 
     std::unordered_map<uint32_t, CustomHeader> rxBlockHeaders;  // basePSN -> CustomHeader（用于恢复包重建）
+
+    uint64_t lastNegotiateSentNs = 0;
+  };
+
+  struct FecPendingCfg
+  {
+    uint32_t blockSize = 0;
+    uint32_t interleavingDepth = 0;
+    uint64_t updatedNs = 0;
+    uint16_t negOp = 0;
   };
 
   std::unordered_map<FecFlowKey, FecFlowState, FecFlowKeyHash> m_fecFlows;
+  std::unordered_map<FecFlowKey, FecPendingCfg, FecFlowKeyHash> m_fecPendingCfgs;
+  // 已完成（观测到 hasLast 且尾块已完整）的 flow tombstone：
+  // 用于丢弃“结束后迟到/重复”的 repair，避免复活 m_fecFlows 造成解码状态抖动/额外开销。
+  std::unordered_map<FecFlowKey, uint64_t, FecFlowKeyHash> m_fecCompletedFlowsUntilNs;
+  uint64_t m_fecCompletedFlowTtlNs{5000000ull}; // 5ms：覆盖跨 DC 乱序/迟到 repair 的典型窗口
+  uint64_t m_fecLastGcNs = 0;
+  EventId m_fecMaintenanceEvent;
+
+  void FecGcFlows(uint64_t nowNs);
+  void FecMaintenanceTick();
 
   // FEC statistics
   uint32_t m_fecEncodedPackets;         ///< Number of data packets encoded
@@ -263,6 +318,24 @@ public:
   // FEC configuration and statistics
   void EnableFec(bool enable);
   void SetFecParameters(uint32_t blockSize, uint32_t interleavingDepth);
+  void SetFecTailFlushMinPkts(uint32_t v) { m_fecTailFlushMinPkts = v; }
+  void SetFecMaxRepairsPerBlock(uint32_t v) { m_fecMaxRepairsPerBlock = v; }
+  void SetFecRepairPacing(bool enabled, double rateRatio, uint64_t maxBacklogBytes, uint64_t burstBytes)
+  {
+    m_fecRepairPacingEnabled = enabled;
+    m_fecRepairRateRatio = rateRatio;
+    m_fecRepairMaxBacklogBytes = maxBacklogBytes;
+    m_fecRepairBurstBytes = burstBytes;
+    // 让速率在下一次 drain 时按 ratio 重新计算
+    m_fecRepairRateBps = 0;
+    m_fecRepairTokenBytes = 0;
+    m_fecRepairTokenLastNs = 0;
+    m_fecRepairZeroRateWarned = false;
+    if (m_fecRepairDrainEvent.IsRunning())
+    {
+      Simulator::Cancel(m_fecRepairDrainEvent);
+    }
+  }
   bool IsFecEnabled() const { return m_fecEnabled; }
   
   struct FecStatistics {
@@ -273,6 +346,20 @@ public:
   };
   
   FecStatistics GetFecStatistics() const;
+
+  struct FecInternalStats {
+    uint64_t flowCount{0};
+    uint64_t totalRxBlockHeaders{0};
+    uint64_t totalDecoderBlocks{0};
+    uint64_t totalDecoderRepairs{0};
+    uint64_t totalDecoderXorBytes{0};
+    uint64_t pendingRepairCount{0};
+    uint64_t pendingRepairBytes{0};
+    uint64_t repairDropped{0};
+  };
+
+  // 仅用于实验观测：汇总当前设备上的 FEC 状态规模，帮助定位内存增长来源
+  FecInternalStats GetFecInternalStats() const;
   
   // FEC callback types
   typedef Callback<void, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> FecEventCallback;
