@@ -223,6 +223,7 @@ public:
   uint64_t m_fecRepairMaxBacklogBytes{8ull * 1024 * 1024}; ///< repair backlog 上限（含 pending + NIC repairQ）
   uint64_t m_fecRepairTokenBytes{0};
   uint64_t m_fecRepairTokenLastNs{0};
+  bool m_fecRepairZeroRateWarned{false};    ///< pacing 速率为 0 的告警去重（避免刷屏/忙等）
   EventId m_fecRepairDrainEvent;
 
   struct FecPendingRepair
@@ -294,6 +295,10 @@ public:
 
   std::unordered_map<FecFlowKey, FecFlowState, FecFlowKeyHash> m_fecFlows;
   std::unordered_map<FecFlowKey, FecPendingCfg, FecFlowKeyHash> m_fecPendingCfgs;
+  // 已完成（观测到 hasLast 且尾块已完整）的 flow tombstone：
+  // 用于丢弃“结束后迟到/重复”的 repair，避免复活 m_fecFlows 造成解码状态抖动/额外开销。
+  std::unordered_map<FecFlowKey, uint64_t, FecFlowKeyHash> m_fecCompletedFlowsUntilNs;
+  uint64_t m_fecCompletedFlowTtlNs{5000000ull}; // 5ms：覆盖跨 DC 乱序/迟到 repair 的典型窗口
   uint64_t m_fecLastGcNs = 0;
   EventId m_fecMaintenanceEvent;
 
@@ -325,6 +330,7 @@ public:
     m_fecRepairRateBps = 0;
     m_fecRepairTokenBytes = 0;
     m_fecRepairTokenLastNs = 0;
+    m_fecRepairZeroRateWarned = false;
     if (m_fecRepairDrainEvent.IsRunning())
     {
       Simulator::Cancel(m_fecRepairDrainEvent);

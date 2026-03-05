@@ -804,6 +804,16 @@ QbbNetDevice::SetFecParameters(uint32_t blockSize, uint32_t interleavingDepth)
     m_fecFlows.clear();
     m_fecPendingCfgs.clear();
 
+    // 参数变化后需要重新计算 pacing 速率，且清理掉可能存在的 drain 定时事件
+    m_fecRepairRateBps = 0;
+    m_fecRepairTokenBytes = 0;
+    m_fecRepairTokenLastNs = 0;
+    m_fecRepairZeroRateWarned = false;
+    if (m_fecRepairDrainEvent.IsRunning())
+    {
+        Simulator::Cancel(m_fecRepairDrainEvent);
+    }
+
     NS_LOG_INFO("FEC parameters set: r=" << m_fecBlockSize
                 << " c=" << m_fecInterleavingDepth);
 }
@@ -880,6 +890,20 @@ QbbNetDevice::FecGcFlows(uint64_t nowNs)
                 (nowNs - it->second.updatedNs) > pendingCfgTtlNs)
             {
                 it = m_fecPendingCfgs.erase(it);
+                continue;
+            }
+            ++it;
+        }
+    }
+
+    // 清理“已完成 flow tombstone”，避免 map 常驻增长
+    if (!m_fecCompletedFlowsUntilNs.empty())
+    {
+        for (auto it = m_fecCompletedFlowsUntilNs.begin(); it != m_fecCompletedFlowsUntilNs.end(); )
+        {
+            if (nowNs > it->second)
+            {
+                it = m_fecCompletedFlowsUntilNs.erase(it);
                 continue;
             }
             ++it;
@@ -1222,9 +1246,25 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
 
     // Per-flow decoder keyed by (sip,dip,sport,dport) to avoid cross-flow coding/decoding.
     FecFlowKey key{ch.sip, ch.dip, ch.udp.sport, ch.udp.dport};
-    FecFlowState& flow = m_fecFlows[key];
     uint32_t flowHash = static_cast<uint32_t>(FecFlowKeyHash{}(key));
     uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+
+    // 若该 flow 已在“尾块完整”时被回收，短窗口内丢弃其迟到/重复的 repair，
+    // 避免 m_fecFlows[key] 复活导致解码器重建与状态抖动。
+    // 注意：这里不应影响正常恢复路径，因为只有在 missing==0 的完成条件下才会写入 tombstone。
+    {
+        auto itDone = m_fecCompletedFlowsUntilNs.find(key);
+        if (itDone != m_fecCompletedFlowsUntilNs.end())
+        {
+            if (nowNs <= itDone->second)
+            {
+                return;
+            }
+            m_fecCompletedFlowsUntilNs.erase(itDone);
+        }
+    }
+
+    FecFlowState& flow = m_fecFlows[key];
     flow.lastActiveNs = nowNs;
     if (!flow.decoder)
     {
@@ -1518,7 +1558,10 @@ QbbNetDevice::FecReceive(Ptr<Packet> packet, const CustomHeader& ch)
             // 消息尾块已经完整（全部 data 已到或已恢复）时回收该 flow 的解码状态，避免大规模场景内存常驻增长。
             if (missing == 0)
             {
+                m_fecCompletedFlowsUntilNs[key] = nowNs + m_fecCompletedFlowTtlNs;
                 m_fecFlows.erase(key);
+                // 该早退路径也触发一次 GC（即便本次被节流，maintenance tick 仍会兜底）
+                FecGcFlows(nowNs);
                 return;
             }
 
@@ -1611,6 +1654,23 @@ QbbNetDevice::FecDrainRepairQueue()
         const long double scaled = static_cast<long double>(linkBps) * static_cast<long double>(ratio);
         m_fecRepairRateBps = static_cast<uint64_t>(std::min<long double>(
             scaled, static_cast<long double>(std::numeric_limits<uint64_t>::max())));
+    }
+
+    // 防御：若 pacing 打开但速率仍为 0，会导致 token 永远为 0，从而 pending repair 永远无法 drain；
+    // 同时会每 1us 反复 schedule，形成忙等，严重拖慢仿真。
+    if (m_fecRepairPacingEnabled && m_fecRepairRateBps == 0)
+    {
+        if (!m_fecRepairZeroRateWarned)
+        {
+            NS_LOG_WARN("FEC: repair pacing enabled but computed repair rate is 0 (blockSize="
+                        << m_fecBlockSize << ", depth=" << m_fecInterleavingDepth
+                        << ", ratio=" << m_fecRepairRateRatio << ", linkBps=" << m_bps.GetBitRate()
+                        << "). Disabling pacing to avoid busy-wait/drain stall.");
+            m_fecRepairZeroRateWarned = true;
+        }
+        m_fecRepairPacingEnabled = false;  // 退化为不 pacing（仍保留 backlog 上限的 best-effort 约束）
+        m_fecRepairTokenBytes = std::numeric_limits<uint64_t>::max() / 2;
+        m_fecRepairTokenLastNs = nowNs;
     }
 
     // 更新 token bucket
