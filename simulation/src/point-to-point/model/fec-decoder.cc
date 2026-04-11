@@ -132,7 +132,7 @@ FecDecoder::ReceiveDataPacket(Ptr<Packet> packet, uint32_t psn)
     }
 
   // 块已完整：旧块的数据/repair 不再需要，立即清理以避免缓存所有数据包导致内存线性增长。
-  if (state.receivedCount >= m_blockSize)
+  if (state.actualSize > 0 && state.receivedCount >= state.actualSize)
     {
       CleanupOldBlocks(basePSN + m_blockSize);
     }
@@ -192,12 +192,24 @@ FecDecoder::ReceiveRepairPacket(Ptr<Packet> repairPacket,
     }
 
   // 如果 repair 的 recipe 当前已无缺失（missingCount==0），该 repair 永远不可能用于恢复，直接丢弃以节省内存。
-  // （后续不会“新增丢包”，missingCount 只会随数据到达/恢复而减少）
+  // （后续不会”新增丢包”，missingCount 只会随数据到达/恢复而减少）
   uint32_t dummyMissing = 0;
   uint32_t missingCount = CountMissingInRecipe(recipe, dummyMissing);
   if (missingCount == 0)
     {
       return;
+    }
+
+  // 若该 repair 携带尾块元数据，更新对应 BlockState 的 actualSize（实际包数 = lastRel + 1）。
+  // 必须在 missingCount==0 早退之后执行，确保有丢包时才写入，避免误建空块状态。
+  if (hasLast)
+    {
+      BlockState& bstate = GetOrCreateBlockState(basePSN);
+      uint32_t tailActual = static_cast<uint32_t>(lastRel) + 1;
+      if (tailActual < bstate.actualSize)
+        {
+          bstate.actualSize = tailActual;
+        }
     }
 
   // Store repair packet info
@@ -293,7 +305,8 @@ FecDecoder::IsBlockComplete(uint32_t basePSN) const
       return false;
     }
 
-  return it->second.receivedCount >= m_blockSize;
+  const BlockState& s = it->second;
+  return s.actualSize > 0 && s.receivedCount >= s.actualSize;
 }
 
 bool
@@ -323,11 +336,16 @@ FecDecoder::CleanupOldBlocks(uint32_t threshold)
       m_dropBeforePsn = threshold;
     }
 
-  // Remove block states before threshold
+  // Remove block states before threshold; accumulate unrecoverable counts for incomplete blocks
   for (auto it = m_blockStates.begin(); it != m_blockStates.end(); )
     {
       if (it->first < threshold)
         {
+          const BlockState& bs = it->second;
+          if (bs.actualSize > 0 && bs.receivedCount < bs.actualSize)
+            {
+              m_unrecoverableCount += (bs.actualSize - bs.receivedCount);
+            }
           it = m_blockStates.erase(it);
         }
       else
@@ -511,7 +529,7 @@ FecDecoder::AttemptRecoveryWithRepair(RepairPacketInfo& repairInfo)
                                              << " now " << state.receivedCount << "/"
                                              << m_blockSize << ")");
 
-  if (state.receivedCount >= m_blockSize)
+  if (state.actualSize > 0 && state.receivedCount >= state.actualSize)
     {
       CleanupOldBlocks(basePSN + m_blockSize);
     }
@@ -566,6 +584,7 @@ FecDecoder::GetOrCreateBlockState(uint32_t basePSN)
   newState.basePSN = basePSN;
   newState.receivedBits.reset();
   newState.receivedCount = 0;
+  newState.actualSize = m_blockSize;
   newState.unitXor.resize(m_interleavingDepth == 0 ? 1 : m_interleavingDepth);
 
   m_blockStates[basePSN] = newState;

@@ -265,18 +265,10 @@ FecEncoder::AddPacketToCodingUnit(CodingUnit& unit, Ptr<Packet> packet, uint32_t
   uint8_t* packetBuffer = new uint8_t[packetSize];
   packet->CopyData(packetBuffer, packetSize);
 
-  // XOR packet into coding unit buffer
+  // XOR packet into coding unit buffer (resize above guarantees xorBuffer.size() >= packetSize)
   for (uint32_t i = 0; i < packetSize; ++i)
     {
-      // Ensure buffer is large enough
-      if (i >= unit.xorBuffer.size())
-        {
-          unit.xorBuffer.push_back(packetBuffer[i]);
-        }
-      else
-        {
-          unit.xorBuffer[i] ^= packetBuffer[i];
-        }
+      unit.xorBuffer[i] ^= packetBuffer[i];
     }
 
   delete[] packetBuffer;

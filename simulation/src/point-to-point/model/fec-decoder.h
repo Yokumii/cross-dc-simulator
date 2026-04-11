@@ -195,6 +195,7 @@ private:
       uint32_t maxLen{0};
     };
     std::vector<UnitXor> unitXor;              ///< size = m_interleavingDepth
+    uint32_t actualSize{0};                    ///< Actual packet count in this block (= m_blockSize for full blocks, lastRel+1 for tail)
   };
 
   /**
